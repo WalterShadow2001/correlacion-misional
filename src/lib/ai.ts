@@ -13,67 +13,46 @@ import type { CorrelationMeeting, AgendaItem } from './types'
 //   2. ~/.z-ai-config
 //   3. /etc/.z-ai-config
 //
-// En Vercel no podemos subir este archivo al repo (contiene tokens),
-// así que lo creamos en runtime desde variables de entorno.
+// En Vercel/serverless no podemos depender de archivos en disco,
+// así que si tenemos variables de entorno, instanciamos ZAI directamente
+// con new ZAI(config) en lugar de ZAI.create().
 
-function ensureZAIConfig() {
-  // Si ya existe alguno de los archivos, no hacer nada
+interface ZAIConfig {
+  baseUrl: string
+  apiKey: string
+  token?: string
+  chatId?: string
+  userId?: string
+}
+
+function loadZAIConfig(): ZAIConfig | null {
+  // 1) Intentar leer del archivo .z-ai-config (desarrollo local)
   const candidates = [
     path.join(process.cwd(), '.z-ai-config'),
     path.join(os.homedir(), '.z-ai-config'),
     '/etc/.z-ai-config',
+    '/tmp/.z-ai-config',
   ]
   for (const p of candidates) {
     try {
-      if (fs.existsSync(p)) return
+      const configStr = fs.readFileSync(p, 'utf-8')
+      const config = JSON.parse(configStr)
+      if (config.baseUrl && config.apiKey) return config
     } catch {}
   }
 
-  // Si hay variables de entorno, crear el archivo en /tmp/.z-ai-config
-  // (única ubicación garantizada escribible en serverless)
-  // y parchear process.env.HOME para que el SDK lo encuentre.
+  // 2) Si hay variables de entorno, usarlas directamente (serverless)
   const baseUrl = process.env.ZAI_BASE_URL
   const apiKey = process.env.ZAI_API_KEY
-  const token = process.env.ZAI_TOKEN
-  const chatId = process.env.ZAI_CHAT_ID
-  const userId = process.env.ZAI_USER_ID
-
   if (baseUrl && apiKey) {
-    const config: Record<string, string> = { baseUrl, apiKey }
-    if (token) config.token = token
-    if (chatId) config.chatId = chatId
-    if (userId) config.userId = userId
-
-    const configStr = JSON.stringify(config)
-
-    // Estrategia 1: escribir en process.cwd()
-    try {
-      fs.writeFileSync(path.join(process.cwd(), '.z-ai-config'), configStr, { mode: 0o600 })
-      console.log('[ai] .z-ai-config written to cwd')
-      return
-    } catch (e) {
-      console.error('[ai] cwd write failed:', e)
-    }
-
-    // Estrategia 2: crear /tmp/.z-ai-config y setear HOME=/tmp
-    try {
-      fs.writeFileSync('/tmp/.z-ai-config', configStr, { mode: 0o600 })
-      process.env.HOME = '/tmp'
-      console.log('[ai] .z-ai-config written to /tmp, HOME set')
-      return
-    } catch (e) {
-      console.error('[ai] /tmp write failed:', e)
-    }
-
-    // Estrategia 3: intentar home original
-    try {
-      const homePath = path.join(os.homedir(), '.z-ai-config')
-      fs.writeFileSync(homePath, configStr, { mode: 0o600 })
-      console.log('[ai] .z-ai-config written to home')
-    } catch (e) {
-      console.error('[ai] home write failed:', e)
-    }
+    const config: ZAIConfig = { baseUrl, apiKey }
+    if (process.env.ZAI_TOKEN) config.token = process.env.ZAI_TOKEN
+    if (process.env.ZAI_CHAT_ID) config.chatId = process.env.ZAI_CHAT_ID
+    if (process.env.ZAI_USER_ID) config.userId = process.env.ZAI_USER_ID
+    return config
   }
+
+  return null
 }
 
 // ========================================
@@ -116,12 +95,18 @@ export interface AIAnalysisResult {
 // Cliente ZAI singleton
 // ========================================
 
-let _zai: Awaited<ReturnType<typeof ZAI.create>> | null = null
+let _zai: InstanceType<typeof ZAI> | null = null
 
-async function getZAI() {
+async function getZAI(): Promise<InstanceType<typeof ZAI>> {
   if (!_zai) {
-    ensureZAIConfig()
-    _zai = await ZAI.create()
+    const config = loadZAIConfig()
+    if (!config) {
+      throw new Error('Configuración Z.ai no encontrada. Define ZAI_BASE_URL y ZAI_API_KEY como variables de entorno, o crea .z-ai-config.')
+    }
+    // Instanciar directamente para evitar loadConfig() del SDK
+    // (que solo busca en filesystem, no apto para serverless)
+    _zai = new (ZAI as unknown as { new (c: ZAIConfig): InstanceType<typeof ZAI> })(config)
+    console.log('[ai] ZAI client initialized with config from', config.baseUrl)
   }
   return _zai
 }
