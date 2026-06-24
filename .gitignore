@@ -51,3 +51,4 @@ server.log
 # uploads
 /upload/
 .vercel
+.env
