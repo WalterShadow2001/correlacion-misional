@@ -1,205 +1,22 @@
-import ZAI from 'z-ai-web-dev-sdk'
-import fs from 'fs'
-import path from 'path'
-import os from 'os'
 import { db } from './db'
-import type { CorrelationMeeting, AgendaItem } from './types'
+import type { CorrelationMeeting, AgendaItem, Area } from './types'
 
 // ========================================
-// Inicializar configuración Z.ai en runtime
+// IA: Pollinations (gratuita, sin API key)
 // ========================================
-// El SDK z-ai-web-dev-sdk busca un archivo .z-ai-config en:
-//   1. process.cwd()/.z-ai-config
-//   2. ~/.z-ai-config
-//   3. /etc/.z-ai-config
-//
-// En Vercel/serverless no podemos depender de archivos en disco,
-// así que si tenemos variables de entorno, instanciamos ZAI directamente
-// con new ZAI(config) en lugar de ZAI.create().
-
-interface ZAIConfig {
-  baseUrl: string
-  apiKey: string
-  token?: string
-  chatId?: string
-  userId?: string
-}
-
-function loadZAIConfig(): ZAIConfig | null {
-  // 1) Intentar leer del archivo .z-ai-config (desarrollo local)
-  const candidates = [
-    path.join(process.cwd(), '.z-ai-config'),
-    path.join(os.homedir(), '.z-ai-config'),
-    '/etc/.z-ai-config',
-    '/tmp/.z-ai-config',
-  ]
-  for (const p of candidates) {
-    try {
-      const configStr = fs.readFileSync(p, 'utf-8')
-      const config = JSON.parse(configStr)
-      if (config.baseUrl && config.apiKey) return config
-    } catch {}
-  }
-
-  // 2) Si hay variables de entorno, usarlas directamente (serverless)
-  const baseUrl = process.env.ZAI_BASE_URL
-  const apiKey = process.env.ZAI_API_KEY
-  if (baseUrl && apiKey) {
-    const config: ZAIConfig = { baseUrl, apiKey }
-    if (process.env.ZAI_TOKEN) config.token = process.env.ZAI_TOKEN
-    if (process.env.ZAI_CHAT_ID) config.chatId = process.env.ZAI_CHAT_ID
-    if (process.env.ZAI_USER_ID) config.userId = process.env.ZAI_USER_ID
-    return config
-  }
-
-  return null
-}
-
-// ========================================
-// LLM abstraction: soporta ZAI (built-in) y Gemini (API key del usuario)
+// API: https://text.pollinations.ai/openai (compatible OpenAI)
+// Imágenes: https://image.pollinations.ai/prompt/{prompt}
+// Ventajas:
+//   - Gratis, sin API key, sin registro
+//   - Funciona desde Vercel/serverless
+//   - Compatible con formato OpenAI (mismo esquema de request/response)
+//   - Generación de imágenes integrada
 // ========================================
 
-export interface LLMMessage {
-  role: 'system' | 'user' | 'assistant'
-  content: string
-}
-
-export interface LLMResponse {
-  content: string
-}
-
-async function getSettings() {
-  try {
-    return await db.aISettings.findUnique({ where: { id: 'default' } })
-  } catch {
-    return null
-  }
-}
-
-// Llamar al LLM con el proveedor configurado
-async function callLLM(messages: LLMMessage[]): Promise<LLMResponse> {
-  const settings = await getSettings()
-
-  // Si el usuario configuró Gemini con API key, usarlo
-  if (settings?.provider === 'gemini' && settings.apiKey) {
-    return callGemini(settings.apiKey, messages)
-  }
-
-  // Si no, usar Z.ai (built-in o env vars)
-  return callZAI(messages)
-}
-
-async function callZAI(messages: LLMMessage[]): Promise<LLMResponse> {
-  const config = loadZAIConfig()
-  if (!config) {
-    throw new Error(
-      'No hay proveedor de IA configurado. Ve a Configuración y selecciona Gemini con tu API key, ' +
-      'o define ZAI_BASE_URL y ZAI_API_KEY como variables de entorno.'
-    )
-  }
-  const zai = new (ZAI as unknown as { new (c: typeof config): InstanceType<typeof ZAI> })(config)
-  console.log('[ai] Using Z.ai provider with', config.baseUrl)
-
-  // El SDK usa 'assistant' como rol del system prompt
-  const sdkMessages = messages.map((m) => ({
-    role: m.role === 'system' ? 'assistant' as const : m.role,
-    content: m.content,
-  }))
-
-  const completion = await zai.chat.completions.create({
-    messages: sdkMessages,
-    thinking: { type: 'disabled' },
-  })
-
-  const content = completion.choices[0]?.message?.content
-  if (!content) throw new Error('Z.ai no devolvió contenido')
-  return { content }
-}
-
-// Google Gemini API (OpenAI-compatible endpoint)
-async function callGemini(apiKey: string, messages: LLMMessage[]): Promise<LLMResponse> {
-  console.log('[ai] Using Google Gemini provider')
-  // Gemini expone una API compatible con OpenAI en esta URL
-  const url = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
-
-  // Convertir messages al formato OpenAI
-  const openaiMessages = messages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }))
-
-  // Lista de modelos a intentar en orden (2.5-pro es el más capaz pero con cuota limitada;
-  // 2.0-flash es más rápido y con más cuota)
-  const models = ['gemini-2.5-pro', 'gemini-2.0-flash']
-
-  let lastError = ''
-  for (const model of models) {
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: openaiMessages,
-          temperature: 0.7,
-        }),
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        const content = data.choices?.[0]?.message?.content
-        if (content) {
-          console.log(`[ai] Gemini responded with model ${model}`)
-          return { content }
-        }
-        lastError = 'Respuesta vacía de Gemini'
-      } else {
-        const errText = await response.text()
-        lastError = `Gemini ${model} error ${response.status}: ${errText.slice(0, 200)}`
-        // 429 = cuota, intentar con el siguiente modelo
-        // 404 = modelo no disponible, intentar con el siguiente
-        if (response.status !== 429 && response.status !== 404 && response.status !== 400) {
-          // Error fatal, no reintentar
-          throw new Error(lastError)
-        }
-        console.log(`[ai] ${model} failed (${response.status}), trying next model...`)
-      }
-    } catch (e) {
-      lastError = (e as Error).message
-      console.log(`[ai] ${model} threw, trying next model...`)
-    }
-  }
-
-  throw new Error(lastError || 'No se pudo conectar con Gemini')
-}
-
-// Generar imagen con Z.ai (solo disponible con Z.ai built-in)
-// Cuando el proveedor es Gemini, no generamos imagen ( Gemini no tiene image gen gratis)
-async function generateImageWithProvider(prompt: string): Promise<string | null> {
-  const settings = await getSettings()
-  if (settings?.provider === 'gemini') {
-    // Gemini no soporta generación de imágenes en este endpoint
-    return null
-  }
-
-  // Usar Z.ai
-  const config = loadZAIConfig()
-  if (!config) return null
-  const zai = new (ZAI as unknown as { new (c: typeof config): InstanceType<typeof ZAI> })(config)
-
-  const enhanced = `${prompt}, editorial illustration style, warm peaceful lighting, no text, no faces visible, soft colors, missionary work theme, high quality`
-  const response = await zai.images.generations.create({
-    prompt: enhanced,
-    size: '1344x768',
-  })
-
-  const base64 = response.data[0]?.base64
-  if (!base64) return null
-  return `data:image/png;base64,${base64}`
-}
+const POLLINATIONS_TEXT_URL = 'https://text.pollinations.ai/openai'
+const POLLINATIONS_IMAGE_URL = 'https://image.pollinations.ai/prompt'
+// Referrer opcional para tier prioritario (más rápido) — se puede dejar vacío
+const REFERRER = 'correlacion-misional'
 
 // ========================================
 // Tipos del análisis IA
@@ -212,10 +29,21 @@ export interface LeadershipTask {
   rationale?: string
 }
 
+export type GeneralTaskCategory =
+  | 'PROGRAMAS'
+  | 'DECORACION'
+  | 'REFRIGERIOS'
+  | 'MUSICA'
+  | 'TRANSPORTE'
+  | 'SETUP'
+  | 'FELLOWSHIPPING'
+  | 'MINISTRACION'
+  | 'OTRO'
+
 export interface GeneralTask {
   task: string
   who?: string
-  category: 'PROGRAMAS' | 'DECORACION' | 'REFRIGERIOS' | 'MUSICA' | 'TRANSPORTE' | 'SETUP' | 'OTRO'
+  category: GeneralTaskCategory
   description?: string
 }
 
@@ -227,6 +55,30 @@ export interface AIQuestion {
   answer?: string | null
 }
 
+// Sugerencias para crear datos en el sistema
+export interface SuggestedInvestigator {
+  firstName: string
+  lastName: string
+  areaName: string  // Se buscará por nombre en la DB
+  status: 'NUEVO' | 'EN_PROGRESO' | 'FECHA_BAUTISMO' | 'BAUTIZADO' | 'INACTIVO'
+  baptismGoalDate?: string | null  // YYYY-MM-DD
+  baptismDate?: string | null
+  phone?: string | null
+  address?: string | null
+  source?: string | null
+  referredBy?: string | null
+  notes?: string | null
+  rationale?: string  // por qué la IA sugiere crear este investigador
+}
+
+export interface SuggestedBaptismEvent {
+  investigatorName: string
+  areaName: string
+  date: string  // YYYY-MM-DD
+  isTentative: boolean  // true si es "tentativa", false si es confirmado
+  notes?: string
+}
+
 export interface AIAnalysisResult {
   summary: string
   leadershipTasks: LeadershipTask[]
@@ -234,19 +86,97 @@ export interface AIAnalysisResult {
   questions: AIQuestion[]
   imagePrompt: string
   imageDescription: string
+  suggestedInvestigators: SuggestedInvestigator[]
+  suggestedBaptismEvents: SuggestedBaptismEvent[]
   rawResponse: string
 }
 
 // ========================================
-// Cliente ZAI singleton (legacy — usar callLLM en su lugar)
+// Llamada al LLM (Pollinations, formato OpenAI)
 // ========================================
-// Eliminado en favor de callLLM() que soporta múltiples proveedores
+
+interface LLMMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+async function callLLM(messages: LLMMessage[]): Promise<string> {
+  console.log('[ai] Calling Pollinations LLM with', messages.length, 'messages')
+
+  // Pollinations acepta el formato OpenAI estándar
+  const body = {
+    model: 'openai-fast',
+    messages,
+    temperature: 0.5,  // más determinístico para JSON
+    seed: Math.floor(Math.random() * 1000000),
+    referrer: REFERRER,
+    // Pedir respuesta directa sin razonamiento extenso
+    reasoning_effort: 'low',
+    max_tokens: 8000,  // límite alto para permitir JSON completo
+  }
+
+  // Pollinations puede tardar 60-120s en responder con prompts largos
+  const response = await fetch(POLLINATIONS_TEXT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    // @ts-expect-error - Next.js soporta signal con AbortSignal.timeout
+    signal: AbortSignal.timeout(180000),  // 3 minutos máximo
+  })
+
+  if (!response.ok) {
+    const errText = await response.text()
+    throw new Error(`Pollinations API error ${response.status}: ${errText.slice(0, 300)}`)
+  }
+
+  const data = await response.json()
+  const message = data.choices?.[0]?.message
+  let content = message?.content
+
+  // GPT-OSS 20B (modelo de Pollinations) a veces pone todo el razonamiento en `reasoning`
+  // y deja `content` vacío. En ese caso, intentamos extraer el JSON del razonamiento.
+  if (!content || content.trim() === '') {
+    const reasoning = message?.reasoning
+    if (reasoning && reasoning.trim()) {
+      console.log('[ai] content vacío, extrayendo de reasoning (length:', reasoning.length, ')')
+      // Buscar el último JSON válido en el razonamiento
+      // El modelo suele escribir el JSON al final del razonamiento
+      const jsonMatch = reasoning.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        content = jsonMatch[0]
+      } else {
+        content = reasoning
+      }
+    }
+  }
+
+  if (!content || content.trim() === '') {
+    console.error('[ai] Pollinations respuesta vacía. Data:', JSON.stringify(data).slice(0, 500))
+    throw new Error('Pollinations devolvió contenido vacío. Intenta de nuevo.')
+  }
+  return content
+}
 
 // ========================================
-// Prompt del sistema
+// Generación de imagen con Pollinations
+// ========================================
+
+export async function generateImageUrl(prompt: string): Promise<string> {
+  // Pollinations image API: la URL misma genera la imagen (lazy).
+  // Solo necesitamos construir la URL — el browser la carga.
+  const enhanced = `${prompt}, editorial illustration style, warm peaceful lighting, no text, no faces visible, soft warm colors, missionary work theme, community and hope, high quality`
+  const encoded = encodeURIComponent(enhanced)
+  const seed = Math.floor(Math.random() * 1000000)
+  return `${POLLINATIONS_IMAGE_URL}/${encoded}?width=1344&height=768&nologo=true&seed=${seed}&referrer=${REFERRER}`
+}
+
+// ========================================
+// Prompt del sistema (enriquecido con contexto SUD)
 // ========================================
 
 const DEFAULT_SYSTEM_PROMPT = `Eres un asistente experto en la obra misional de La Iglesia de Jesucristo de los Santos de los Últimos Días. Tu rol es ayudar al **Líder Misional de Barrio** a organizar la información de las reuniones de coordinación misional semanal con los misioneros de tiempo completo.
+
+**IMPORTANTE: Respondes SIEMPRE con un JSON válido y completo, sin texto adicional, sin razonamiento previo, sin explicaciones. Solo el JSON.**
 
 ## Contexto del barrio actual
 Estás ayudando específicamente al **Barrio Panamericano**, que está dividido en tres áreas misionales:
@@ -259,7 +189,6 @@ Cada área tiene asignada una compañía de misioneros (elders o hermanas) y el 
 ## Estructura de la Iglesia que conoces perfectamente
 
 ### Brazo Misional (predicar)
-- **Primera Presidencia y Cuórum de los Doce Apóstoles**: asignan misioneros a su misión
 - **Presidente de Misión y esposa**: dirigen 150-250 misioneros durante 3 años; él posee las llaves para autorizar bautismos
 - **Ayudantes del Presidente (AP)**: misioneros jóvenes que asisten al presidente
 - **Líderes de Zona (LZ)**: supervisan grandes regiones de la misión
@@ -297,51 +226,40 @@ Reuniones breves y específicas. **No se centran en eventos, sino en personas**.
 ## Reglas críticas para clasificar tareas
 
 ### Tareas de LÍDERES (requieren autoridad del sacerdocio o llamamiento específico)
-Solo pueden hacerlas:
-- **Obispo**: entrevistas bautismales, autorizaciones, llamamientos, entrevistas anuales, ordenanzas (aparte de bendecir la Santa Cena)
-- **Presidente de Estaca**: entrevistas para bautismos de personas especiales, llamamientos de obispado, tribunales
+- **Obispo**: entrevistas bautismales, autorizaciones, llamamientos, ordenanzas
+- **Presidente de Estaca**: entrevistas especiales, llamamientos de obispado
 - **Líder Misional de Barrio**: coordinación misional, asignar fellowshippers, coordinar bautismos
-- **Presidente de Quórum de Élderes**: dirigir quórum, entrevistas de fellowshipping
+- **Presidente de Quórum de Élderes**: dirigir quórum, organizar raíces
 - **Presidente de Sociedad de Socorro**: coordinar ministración a mujeres
-- **Líderes de Sacerdocio**: bendecir la Santa Cena (élderes/sacerdotes), ordenanzas
-- **Misioneros**: enseñar lecciones misionales, extender compromisos bautismales (con autorización del Presidente de Misión)
+- **Líderes de Sacerdocio**: bendecir la Santa Cena, ordenanzas
+- **Misioneros**: enseñar lecciones misionales, extender compromisos bautismales
 - **Líderes de Distrito (LD)**: entrevistas previas al bautismo
 
 ### Tareas para CUALQUIER MIEMBRO (no requieren autoridad)
-Cualquier miembro activo del barrio puede hacerlas:
-- **PROGRAMAS**: imprimir programas del servicio bautismal o sacramental
-- **DECORACION**: decorar el baptisterio, arreglos florales, ambientar para actividades
-- **REFRIGERIOS**: preparar comida/postres para bautismos, noches de hogar, actividades
-- **MUSICA**: tocar piano/órgano, dirigir himnos, coros
-- **TRANSPORTE**: llevar investigadores o miembros a la iglesia, citas, actividades
-- **SETUP**: armar sillas, preparar salón, limpiar después
-- **FELLOWSHIPPING**: acompañar a los misioneros a enseñar (cualquier miembro puede, NO requiere ser líder), invitar a investigadores a comer, hacer amigos
-- **MINISTRACION**: visitar miembros (especialmente inactivos o conversos recientes) — cualquier maestro ministrante o hermana ministrante puede hacerlo
-- **OTRO**: cualquier otra tarea logística o de servicio
+- **PROGRAMAS**: imprimir programas del servicio bautismal
+- **DECORACION**: decorar baptisterio, arreglos florales
+- **REFRIGERIOS**: preparar comida/postres para bautismos, noches de hogar
+- **MUSICA**: tocar piano/órgano, dirigir himnos
+- **TRANSPORTE**: llevar investigadores o miembros a la iglesia
+- **SETUP**: armar sillas, preparar salón, limpiar
+- **FELLOWSHIPPING**: acompañar a los misioneros a enseñar (cualquier miembro puede)
+- **MINISTRACION**: visitar miembros (especialmente inactivos o conversos recientes)
+- **OTRO**: cualquier otra tarea logística
 
 ## Vocabulario SUD que usas correctamente
 - barrio, estaca, obispado, presidencia de estaca
 - élder, hermana, presidente de misión, AP, LZ, LD, HLC
 - investigador, converso reciente, miembro inactivo, fellowshipping, hermanamiento
-- ministración (antigua "visita familiar" o "maestras visitantes")
-- lecciones misionales (las 5 del manual Predicad Mi Evangelio)
-- Santa Cena, bautismo, confirmación, ordenanza
-- cuórum, sociedad de socorro, primaria, jóvenes, escuela dominical
-- noche de hogar, día de preparación (P-Day)
-- Predicad Mi Evangelio (manual misional)
-- "raíz" o "rait" = reuniones de activación/inactivos (jerga misional común)
+- ministración, lecciones misionales, Santa Cena, bautismo, confirmación
+- noche de hogar, día de preparación (P-Day), Predicad Mi Evangelio
+- "raíz" o "rait" = reuniones de activación de inactivos (jerga misional)
 - Libro de Área (registro misional, ahora en la app Predicad Mi Evangelio)
 
-## Horario misional (para contexto)
-Los misioneros se despiertan 6:30 AM, estudian 8-10 AM, trabajan 10 AM-9 PM, se acuestan 10:30 PM. Tienen P-Day (día de preparación) una vez por semana, usualmente lunes. Esto afecta cuándo pueden tener citas o actividades con investigadores.
-
 ## Tu tono
-- Hablas español neutro mexicano (puedes usar "usted")
+- Hablas español neutro mexicano
 - Eres respetuoso del contexto espiritual
-- No juzgas a miembros inactivos ni a investigadores
 - Sugieres acciones prácticas y específicas
-- Conoces que el contexto espiritual es central: oración, estudio de las Escrituras, asistencia a la iglesia, etc.
-- Cuando hay una cita específica mencionada (ej. "Jueves a las 5 de la tarde en La Quemada"), la preservas en las tareas`
+- Preservas nombres y fechas mencionadas en las notas`
 
 async function getSystemPrompt(): Promise<string> {
   try {
@@ -354,33 +272,36 @@ async function getSystemPrompt(): Promise<string> {
 }
 
 // ========================================
-// Construir contexto de la reunión
+// Construir contexto de la reunión (notas grandes por área)
 // ========================================
 
-function buildMeetingContext(meeting: CorrelationMeeting & { agendaItems?: AgendaItem[] }): string {
+function buildMeetingContext(
+  meeting: CorrelationMeeting & { agendaItems?: AgendaItem[] },
+  areas: Area[] = []
+): string {
   const date = new Date(meeting.meetingDate).toLocaleDateString('es-MX', {
     weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
   })
 
   const parts: string[] = [
-    `## Reunión de correlación — ${date}`,
-    `**Área:** ${meeting.area?.name || 'General (toda la zona)'}`,
+    `## Reunión de coordinación — ${date}`,
     `**Líder que preside:** ${meeting.leader}`,
   ]
   if (meeting.attendees) parts.push(`**Asistentes:** ${meeting.attendees}`)
   if (meeting.vision) parts.push(`\n### Visión / enfoque de la semana\n${meeting.vision}`)
   if (meeting.priorities) parts.push(`\n### Prioridades\n${meeting.priorities}`)
-  if (meeting.commitments) parts.push(`\n### Compromisos generales\n${meeting.commitments}`)
-  if (meeting.notes) parts.push(`\n### Notas generales\n${meeting.notes}`)
 
-  if (meeting.agendaItems && meeting.agendaItems.length > 0) {
-    parts.push('\n### Agenda discutida')
-    meeting.agendaItems.forEach((item, i) => {
-      parts.push(`\n**${i + 1}. ${item.topic}**`)
-      if (item.discussion) parts.push(`   - Discusión: ${item.discussion}`)
-      if (item.action) parts.push(`   - Acción propuesta: ${item.action}`)
-      if (item.responsible) parts.push(`   - Responsable sugerido: ${item.responsible}`)
-    })
+  // EL CAMPO CLAVE: rawNotes (la nota grande dividida por secciones)
+  if (meeting.notes) {
+    parts.push(`\n### NOTAS DE LA REUNIÓN (divididas por área)\n${meeting.notes}`)
+  }
+
+  if (meeting.commitments) parts.push(`\n### Compromisos generales\n${meeting.commitments}`)
+
+  // Lista de áreas disponibles para que la IA sepa cuáles existen
+  if (areas.length > 0) {
+    parts.push(`\n### Áreas misionales del barrio`)
+    areas.forEach((a) => parts.push(`- ${a.name}`))
   }
 
   return parts.join('\n')
@@ -397,11 +318,11 @@ function buildAnalysisPrompt(meetingContext: string): string {
 
 ## Tu tarea
 
-Analiza la información de esta reunión de coordinación misional del Barrio Panamericano y genera un JSON con la siguiente estructura EXACTA. NO agregues texto fuera del JSON.
+Analiza las notas de esta reunión de coordinación misional del Barrio Panamericano y genera un JSON con la siguiente estructura EXACTA. NO agregues texto fuera del JSON.
 
 **IMPORTANTE: Las notas del líder misional suelen ser breves y abreviadas.** Por ejemplo:
 - "familia ornelas madre y 4 hijos se bautisan el 28 de junio" → bautismo familiar programado
-- "necesitamos ropa, hermana pereda, Karina o sandy y pdte de hombres jovenes" → se necesita ropa bautismal y fellowshippers (Hna. Pereda, Karina, Sandy o el Presidente de Hombres Jóvenes)
+- "necesitamos ropa, hermana pereda, Karina o sandy y pdte de hombres jovenes" → se necesita ropa bautismal y fellowshippers
 - "raíz" o "rait" → reunión de activación de inactivos
 - "MAS MINISTRACION" → se necesita más ministración (visitas) a esa persona
 - "cita mañana a las 7:30pm" → cita específica programada
@@ -412,43 +333,43 @@ Interpreta estas abreviaturas correctamente en el contexto misional SUD.
 
 \`\`\`json
 {
-  "summary": "Resumen estructurado en markdown de máximo 400 palabras. Incluye: propósito de la reunión, decisiones principales, temas prioritarios y próximos pasos. Usa encabezados ## y listas con - cuando sea apropiado. Menciona a las personas por nombre cuando sea relevante.",
+  "summary": "Resumen estructurado en markdown de máximo 500 palabras. Incluye: propósito de la reunión, decisiones principales por área, temas prioritarios y próximos pasos. Usa encabezados ## y listas con - cuando sea apropiado. Menciona a las personas por nombre cuando sea relevante.",
   "leadershipTasks": [
     {
-      "task": "Descripción clara y específica de la tarea que SOLO puede hacer un líder del sacerdocio (obispo, líder misional de barrio, líder de quórum, presidente de hombres jóvenes, presidente de misión, LD, etc.). Ejemplos: entrevistas bautismales, entrevistas previas al bautismo (LD), ordenanzas, llamamientos, autorizaciones del presidente de misión.",
-      "who": "Quién debe hacerlo (rol específico, no nombre). Ej: 'Obispo', 'Líder misional de barrio', 'Presidente de quórum de élderes', 'Líder de Distrito (LD)'",
-      "dueDate": "Fecha límite sugerida en formato YYYY-MM-DD o null",
-      "rationale": "Por qué es importante o por qué debe hacerlo un líder"
+      "task": "Descripción clara de la tarea que SOLO puede hacer un líder del sacerdocio o con llamamiento específico (obispo, líder misional, LD, presidente de quórum, etc.).",
+      "who": "Rol específico (no nombre). Ej: 'Obispo', 'Líder de Distrito (LD)', 'Líder Misional de Barrio'",
+      "dueDate": "Fecha en YYYY-MM-DD o null",
+      "rationale": "Por qué debe hacerlo un líder"
     }
   ],
   "generalTasks": [
     {
-      "task": "Descripción clara de la tarea que PUEDE hacer cualquier miembro del barrio, NO requiere ordenación al sacerdocio ni llamamiento específico. Incluye fellowshipping, llevar ropa bautismal, ministración, decoración, refrigerios, transporte, música, etc.",
-      "who": "Voluntario sugerido (usa nombres mencionados en las notas si los hay, ej: 'Hna. Pereda, Karina o Sandy' o 'Presidente de Hombres Jóvenes' o 'cualquier miembro')",
+      "task": "Descripción de la tarea que cualquier miembro puede hacer",
+      "who": "Voluntario sugerido (usa nombres mencionados si los hay)",
       "category": "PROGRAMAS | DECORACION | REFRIGERIOS | MUSICA | TRANSPORTE | SETUP | FELLOWSHIPPING | MINISTRACION | OTRO",
-      "description": "Detalles de cómo hacerlo o contexto adicional"
+      "description": "Detalles de cómo hacerlo"
     }
   ],
   "questions": [
     {
       "id": "q1",
-      "question": "Pregunta específica sobre algo que no quedó claro en las notas de la reunión",
-      "context": "Por qué es relevante esta pregunta",
+      "question": "Pregunta sobre algo ambiguo en las notas",
+      "context": "Por qué es relevante",
       "options": ["Opción A", "Opción B", "Opción C"]
     }
   ],
-  "imagePrompt": "Prompt en inglés para generar una imagen que represente esta reunión. Estilo: ilustración editorial cálida, colores suaves, sin texto, sin rostros visibles, tema de obra misional SUD con esperanza y comunidad.",
-  "imageDescription": "Descripción en español de qué representará la imagen generada"
+  "imagePrompt": "Prompt en inglés para generar una imagen que represente esta reunión. Estilo ilustración editorial cálida, sin texto, sin rostros visibles, tema obra misional SUD.",
+  "imageDescription": "Descripción en español de qué representará la imagen"
 }
 \`\`\`
 
 ## Reglas importantes
 
-1. **leadershipTasks**: Solo tareas que requieren autoridad del sacerdocio o llamamiento específico. Si dudas si algo es de líder, ponlo aquí.
-2. **generalTasks**: Tareas que cualquier miembro activo puede hacer. IMPORTANTE: fellowshipping (acompañar a enseñar), llevar ropa bautismal, ministración a inactivos/conversos, decoración, refrigerios, transporte, música, setup — TODAS son tareas de cualquier miembro.
-3. **questions**: Solo si HAY ambigüedad real en las notas. Si todo está claro, devuelve array vacío.
-4. **Fechas**: Si las notas mencionan "el 28 de junio", usa la fecha exacta (2026-06-28). Si mencionan "este Jueves", calcula la fecha del próximo jueves desde hoy (hoy es 2026-06-24, miércoles).
-5. **Nombres**: Preserva los nombres de miembros e investigadores mencionados en las notas (Hna. Pereda, Karina, Sandy, familia Ornelas, familia Dueñas, Yaneth, Alejandro Fierro, Korina, Edén, etc.).
+1. **leadershipTasks**: Solo tareas que requieren autoridad del sacerdocio o llamamiento específico.
+2. **generalTasks**: Cualquier miembro puede hacerlas. fellowshipping, ropa bautismal, ministración, decoración, refrigerios, transporte, música, setup — TODAS son de cualquier miembro.
+3. **questions**: Solo si HAY ambigüedad real. Si todo está claro, devuelve array vacío.
+4. **Fechas**: Si las notas mencionan "el 28 de junio", usa 2026-06-28. Si dicen "este Jueves", calcula la fecha del próximo jueves desde hoy (2026-06-24, miércoles → próximo jueves es 2026-06-25).
+5. **Nombres**: Preserva nombres mencionados en las notas.
 6. Devuelve SOLO el JSON, sin markdown code fences, sin texto explicativo antes o después.`
 }
 
@@ -457,71 +378,247 @@ Interpreta estas abreviaturas correctamente en el contexto misional SUD.
 // ========================================
 
 function parseAIResponse(content: string): AIAnalysisResult {
-  // Remover code fences si existen
   let cleaned = content.trim()
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
   }
 
-  // Intentar extraer el JSON
-  let parsed: any
+  // Intentar parseo directo
+  let parsed: Record<string, unknown> | null = null
   try {
     parsed = JSON.parse(cleaned)
   } catch {
-    // Intentar encontrar el primer { y el último }
+    // Intentar extraer el JSON de un texto más grande
     const start = cleaned.indexOf('{')
     const end = cleaned.lastIndexOf('}')
     if (start !== -1 && end !== -1 && end > start) {
       try {
         parsed = JSON.parse(cleaned.slice(start, end + 1))
-      } catch (e2) {
-        throw new Error(`No se pudo parsear la respuesta de la IA como JSON: ${(e2 as Error).message}`)
+      } catch {
+        // Intentar reparar JSON truncado cerrando estructuras abiertas
+        try {
+          let truncated = cleaned.slice(start)
+          let openBraces = 0, openBrackets = 0
+          let inString = false, escape = false
+          for (const ch of truncated) {
+            if (escape) { escape = false; continue }
+            if (ch === '\\') { escape = true; continue }
+            if (ch === '"') { inString = !inString; continue }
+            if (inString) continue
+            if (ch === '{') openBraces++
+            else if (ch === '}') openBraces--
+            else if (ch === '[') openBrackets++
+            else if (ch === ']') openBrackets--
+          }
+          truncated = truncated.replace(/,\s*$/, '')
+          if (inString) truncated += '"'
+          for (let i = 0; i < openBrackets; i++) truncated += ']'
+          for (let i = 0; i < openBraces; i++) truncated += '}'
+          parsed = JSON.parse(truncated)
+          console.log('[ai] JSON reparado tras truncamiento')
+        } catch {
+          // Última estrategia: extraer campos individualmente con regex
+          parsed = extractFieldsIndividually(cleaned)
+          if (parsed) {
+            console.log('[ai] JSON extraído campo por campo (fallback)')
+          } else {
+            console.error('[ai] No se pudo parsear JSON. Contenido (primeros 1500 chars):', cleaned.slice(0, 1500))
+            throw new Error('No se pudo parsear la respuesta de la IA como JSON. Intenta de nuevo.')
+          }
+        }
       }
     } else {
-      throw new Error('No se pudo parsear la respuesta de la IA como JSON')
+      parsed = extractFieldsIndividually(cleaned)
+      if (!parsed) {
+        throw new Error('No se pudo parsear la respuesta de la IA como JSON')
+      }
     }
   }
 
   return {
     summary: String(parsed.summary || '').trim(),
-    leadershipTasks: Array.isArray(parsed.leadershipTasks) ? parsed.leadershipTasks : [],
-    generalTasks: Array.isArray(parsed.generalTasks) ? parsed.generalTasks : [],
-    questions: Array.isArray(parsed.questions) ? parsed.questions : [],
+    leadershipTasks: Array.isArray(parsed.leadershipTasks) ? parsed.leadershipTasks as LeadershipTask[] : [],
+    generalTasks: Array.isArray(parsed.generalTasks) ? parsed.generalTasks as GeneralTask[] : [],
+    questions: Array.isArray(parsed.questions) ? parsed.questions as AIQuestion[] : [],
     imagePrompt: String(parsed.imagePrompt || '').trim(),
     imageDescription: String(parsed.imageDescription || '').trim(),
+    suggestedInvestigators: Array.isArray(parsed.suggestedInvestigators) ? parsed.suggestedInvestigators as SuggestedInvestigator[] : [],
+    suggestedBaptismEvents: Array.isArray(parsed.suggestedBaptismEvents) ? parsed.suggestedBaptismEvents as SuggestedBaptismEvent[] : [],
     rawResponse: content,
   }
+}
+
+// Extracción tolerante de campos cuando el JSON está corrupto
+function extractFieldsIndividually(text: string): Record<string, unknown> | null {
+  const result: Record<string, unknown> = {}
+
+  // Helper: extraer un string value de una key
+  const extractString = (key: string): string => {
+    // Buscar "key": "value" o "key": value
+    const regex = new RegExp(`"${key}"\\s*:\\s*("(?:[^"\\\\]|\\\\.)*"|[\\w\\s]+)`, 'm')
+    const match = text.match(regex)
+    if (match) {
+      let v = match[1]
+      if (v.startsWith('"')) v = v.slice(1, -1)
+      return v
+    }
+    return ''
+  }
+
+  // Helper: extraer array de objetos
+  const extractArray = (key: string): unknown[] => {
+    const regex = new RegExp(`"${key}"\\s*:\\s*\\[`, 'm')
+    const match = text.match(regex)
+    if (!match) return []
+    const start = match.index! + match[0].length
+    // Encontrar el final del array (balanceo de corchetes)
+    let depth = 1, i = start, inString = false, escape = false
+    while (i < text.length && depth > 0) {
+      const ch = text[i]
+      if (escape) { escape = false; i++; continue }
+      if (ch === '\\') { escape = true; i++; continue }
+      if (ch === '"') { inString = !inString; i++; continue }
+      if (inString) { i++; continue }
+      if (ch === '[') depth++
+      else if (ch === ']') depth--
+      i++
+    }
+    const arrayStr = text.slice(start, i - 1)
+    // Intentar parsear el array como JSON
+    try {
+      return JSON.parse('[' + arrayStr + ']')
+    } catch {
+      // Si falla, intentar parsear objetos individuales
+      const objects: unknown[] = []
+      const objRegex = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g
+      let m
+      while ((m = objRegex.exec(arrayStr)) !== null) {
+        try {
+          objects.push(JSON.parse(m[0]))
+        } catch {
+          // Intentar reparar
+          try {
+            const fixed = m[0] + (m[0].split('{').length - 1 > m[0].split('}').length - 1 ? '}' : '')
+            objects.push(JSON.parse(fixed))
+          } catch {
+            // Ignorar objetos corruptos
+          }
+        }
+      }
+      return objects
+    }
+  }
+
+  result.summary = extractString('summary')
+  result.imagePrompt = extractString('imagePrompt')
+  result.imageDescription = extractString('imageDescription')
+  result.leadershipTasks = extractArray('leadershipTasks')
+  result.generalTasks = extractArray('generalTasks')
+  result.questions = extractArray('questions')
+  result.suggestedInvestigators = extractArray('suggestedInvestigators')
+  result.suggestedBaptismEvents = extractArray('suggestedBaptismEvents')
+
+  // Si al menos summary o alguna lista tienen contenido, devolver
+  if (result.summary || (result.leadershipTasks as unknown[])?.length || (result.suggestedInvestigators as unknown[])?.length) {
+    return result
+  }
+  return null
 }
 
 // ========================================
 // Función principal: analizar reunión
 // ========================================
 
+// Dividimos en 2 llamadas para evitar truncamiento por límite de tokens:
+//   Llamada 1: resumen, tareas, preguntas, imagen (output más conceptual)
+//   Llamada 2: investigadores y bautismos sugeridos (output más estructurado)
+// Ambas usan el mismo contexto pero prompts diferentes.
+
 export async function analyzeMeeting(
-  meeting: CorrelationMeeting & { agendaItems?: AgendaItem[] }
+  meeting: CorrelationMeeting & { agendaItems?: AgendaItem[] },
+  areas: Area[] = []
 ): Promise<AIAnalysisResult> {
   const systemPrompt = await getSystemPrompt()
-  const meetingContext = buildMeetingContext(meeting)
-  const userPrompt = buildAnalysisPrompt(meetingContext)
+  const meetingContext = buildMeetingContext(meeting, areas)
 
-  const { content } = await callLLM([
+  // === Llamada 1: análisis principal ===
+  const analysisPrompt = buildAnalysisPrompt(meetingContext)
+  console.log('[ai] Llamada 1: análisis principal (resumen, tareas, imagen)')
+  const content1 = await callLLM([
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
+    { role: 'user', content: analysisPrompt },
   ])
+  const result1 = parseAIResponse(content1)
 
-  return parseAIResponse(content)
+  // === Llamada 2: sugerencias estructuradas para el sistema ===
+  console.log('[ai] Llamada 2: sugerencias de investigadores y bautismos')
+  const suggestionsPrompt = buildSuggestionsPrompt(meetingContext)
+  const content2 = await callLLM([
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: suggestionsPrompt },
+  ])
+  const result2 = parseAIResponse(content2)
+
+  // Combinar resultados
+  return {
+    ...result1,
+    suggestedInvestigators: result2.suggestedInvestigators,
+    suggestedBaptismEvents: result2.suggestedBaptismEvents,
+    rawResponse: JSON.stringify({ analysis: content1, suggestions: content2 }),
+  }
 }
 
 // ========================================
-// Generar imagen de la reunión
+// Prompt para sugerencias estructuradas (investigadores + bautismos)
 // ========================================
 
-export async function generateMeetingImage(prompt: string): Promise<string> {
-  const dataUrl = await generateImageWithProvider(prompt)
-  if (!dataUrl) {
-    throw new Error('La generación de imagen solo está disponible con el proveedor Z.ai. Selecciona Z.ai en Configuración o configura variables ZAI_BASE_URL/ZAI_API_KEY.')
-  }
-  return dataUrl
+function buildSuggestionsPrompt(meetingContext: string): string {
+  return `${meetingContext}
+
+---
+
+## Tu tarea
+
+Identifica TODAS las personas mencionadas en las notas que están siendo enseñadas por los misioneros o que tienen bautismo programado/realizado. Genera un JSON con la siguiente estructura EXACTA. NO agregues texto fuera del JSON.
+
+\`\`\`json
+{
+  "suggestedInvestigators": [
+    {
+      "firstName": "Nombre (solo el primer nombre, ej: 'María', 'Juan', 'Valeria')",
+      "lastName": "Apellido (si se menciona, ej: 'Ornelas', 'González', 'Valenzuela'. Si no se menciona, usa '')",
+      "areaName": "Panamericano A | Panamericano B | Panamericano C (debe coincidir con el área bajo la cual aparece la nota)",
+      "status": "NUEVO | EN_PROGRESO | FECHA_BAUTISMO | BAUTIZADO | INACTIVO",
+      "baptismGoalDate": "YYYY-MM-DD si hay fecha de bautismo (confirmada o tentativa), o null",
+      "baptismDate": "YYYY-MM-DD solo si ya está bautizado, o null",
+      "phone": "teléfono si se menciona, o null",
+      "address": "dirección/lugar si se menciona (ej: 'laderas', 'La Quemada'), o null",
+      "source": "fuente si se infiere (ej: 'Referencia de miembro'), o null",
+      "referredBy": "nombre del miembro que refirió si se menciona, o null",
+      "notes": "contexto breve sobre esta persona",
+      "rationale": "por qué sugieres crear este investigador"
+    }
+  ],
+  "suggestedBaptismEvents": [
+    {
+      "investigatorName": "Nombre completo del investigador (ej: 'María Ornelas')",
+      "areaName": "Panamericano A | B | C",
+      "date": "YYYY-MM-DD",
+      "isTentative": true si dice "tentativa"/"tentativo", false si está confirmado,
+      "notes": "notas adicionales"
+    }
+  ]
+}
+\`\`\`
+
+## Reglas
+
+1. **Crea una entrada por CADA persona mencionada** en las notas que está siendo enseñada, bautizada, o que es miembro inactivo a visitar.
+2. Si la nota dice "familia Ornelas madre y 4 hijos", crea entradas separadas para cada miembro si se pueden identificar (madre, hija 15, hijo 14, gemelos 12). Si no se pueden identificar los nombres, crea una entrada con firstName="Familia" lastName="Ornelas".
+3. Para bautismos: si la nota dice "se bautisan el 28 de junio" → fecha exacta 2026-06-28, isTentative=false. Si dice "tentativa para 4 de julio" → fecha 2026-07-04, isTentative=true.
+4. El areaName debe ser el área bajo la cual aparece la nota (entre los marcadores === Panamericano X ===).
+5. Si la nota menciona "raíz" o "rait", es una reunión de activación, no un bautismo.
+6. Devuelve SOLO el JSON, sin texto adicional.`
 }
 
 // ========================================
@@ -531,12 +628,12 @@ export async function generateMeetingImage(prompt: string): Promise<string> {
 export async function refineAnalysis(
   meeting: CorrelationMeeting & { agendaItems?: AgendaItem[] },
   previousAnalysis: AIAnalysisResult,
-  answers: Record<string, string>
+  answers: Record<string, string>,
+  areas: Area[] = []
 ): Promise<AIAnalysisResult> {
   const systemPrompt = await getSystemPrompt()
-  const meetingContext = buildMeetingContext(meeting)
+  const meetingContext = buildMeetingContext(meeting, areas)
 
-  // Construir resumen de respuestas
   const answersText = previousAnalysis.questions
     .map((q) => `- Pregunta: ${q.question}\n  Respuesta del líder: ${answers[q.id] || '(sin respuesta)'}`)
     .join('\n')
@@ -557,11 +654,11 @@ ${answersText}
 
 ## Tu tarea
 
-Con esta nueva información, genera una versión REFINADA del análisis. Mantén la misma estructura JSON. Las preguntas se eliminan (o se agregan nuevas si surgieron dudas adicionales por las respuestas). Ajusta las tareas y el resumen según las respuestas recibidas.
+Con esta nueva información, genera una versión REFINADA del análisis. Mantén la misma estructura JSON. Las preguntas respondidas se eliminan (o se agregan nuevas si surgieron). Ajusta las tareas, sugerencias de investigadores y bautismos según las respuestas.
 
 Devuelve SOLO el JSON, sin texto adicional.`
 
-  const { content } = await callLLM([
+  const content = await callLLM([
     { role: 'system', content: systemPrompt },
     { role: 'user', content: userPrompt },
   ])
@@ -570,18 +667,18 @@ Devuelve SOLO el JSON, sin texto adicional.`
 }
 
 // ========================================
-// Test de conexión (para settings)
+// Test de conexión
 // ========================================
 
 export async function testAIConnection(): Promise<{ ok: boolean; message: string }> {
   try {
-    const { content } = await callLLM([
+    const content = await callLLM([
       { role: 'system', content: 'Eres un asistente útil. Responde en español.' },
       { role: 'user', content: 'Responde solo con la palabra: CONECTADO' },
     ])
     return {
       ok: true,
-      message: `IA conectada correctamente. Respuesta de prueba: "${content.slice(0, 50)}"`,
+      message: `IA conectada correctamente (Pollinations, gratis). Respuesta de prueba: "${content.slice(0, 50)}"`,
     }
   } catch (e) {
     return { ok: false, message: `Error: ${(e as Error).message}` }

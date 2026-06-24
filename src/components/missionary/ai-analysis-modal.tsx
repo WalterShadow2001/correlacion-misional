@@ -14,10 +14,9 @@ import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { Loader2, Sparkles, AlertTriangle, RefreshCw, Wand2, ImageIcon, Crown, Users, HelpCircle } from 'lucide-react'
+import { Loader2, Sparkles, AlertTriangle, RefreshCw, Wand2, Crown, Users, HelpCircle, UserPlus, CalendarDays, CheckCircle2, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
-import type { AIAnalysis, AIQuestion } from '@/lib/types'
+import type { AIAnalysis, AIQuestion, SuggestedInvestigator, SuggestedBaptismEvent } from '@/lib/types'
 import {
   AI_STATUS_LABELS,
   AI_STATUS_COLORS,
@@ -32,17 +31,34 @@ interface Props {
   onOpenChange: (open: boolean) => void
 }
 
+interface ApplyResult {
+  ok: boolean
+  summary: {
+    investigatorsCreated: number
+    investigatorsSkipped: number
+    baptismsUpdated: number
+    baptismsSkipped: number
+  }
+  details: {
+    investigators: Array<{ name: string; area: string; status: string; created: boolean; reason?: string }>
+    baptisms: Array<{ investigator: string; date: string; tentative: boolean; updated: boolean; reason?: string }>
+  }
+}
+
 export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
   const [analysis, setAnalysis] = useState<AIAnalysis | null>(null)
   const [loading, setLoading] = useState(true)
   const [analyzing, setAnalyzing] = useState(false)
   const [refining, setRefining] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const [applyResult, setApplyResult] = useState<ApplyResult | null>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [showRefinePanel, setShowRefinePanel] = useState(false)
 
   useEffect(() => {
     if (meetingId && open) {
       loadAnalysis()
+      setApplyResult(null)
     }
   }, [meetingId, open])
 
@@ -62,7 +78,7 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
           setAnswers(initial)
         }
       }
-    } catch (e) {
+    } catch {
       toast.error('Error al cargar análisis')
     } finally {
       setLoading(false)
@@ -72,6 +88,7 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
   const analyze = async () => {
     if (!meetingId) return
     setAnalyzing(true)
+    setApplyResult(null)
     try {
       const r = await fetch(`/api/correlation/${meetingId}/analyze`, { method: 'POST' })
       const data = await r.json()
@@ -88,7 +105,7 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
       } else {
         toast.error(data.error || 'Error al analizar')
       }
-    } catch (e) {
+    } catch {
       toast.error('Error de red al analizar')
     } finally {
       setAnalyzing(false)
@@ -119,21 +136,37 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
       } else {
         toast.error(data.error || 'Error al refinar')
       }
-    } catch (e) {
+    } catch {
       toast.error('Error de red al refinar')
     } finally {
       setRefining(false)
     }
   }
 
-  const downloadImage = () => {
-    if (!analysis?.imageDataUrl) return
-    const link = document.createElement('a')
-    link.href = analysis.imageDataUrl
-    link.download = `reunion-${meetingId}.png`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+  const applySuggestions = async () => {
+    if (!meetingId || !analysis) return
+    setApplying(true)
+    try {
+      const r = await fetch(`/api/correlation/${meetingId}/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          investigators: analysis.suggestedInvestigators || [],
+          baptisms: analysis.suggestedBaptismEvents || [],
+        }),
+      })
+      const data = await r.json()
+      if (r.ok && data.ok) {
+        setApplyResult(data)
+        toast.success(`Aplicado: ${data.summary.investigatorsCreated} investigadores creados, ${data.summary.baptismsUpdated} bautismos actualizados`)
+      } else {
+        toast.error(data.error || 'Error al aplicar sugerencias')
+      }
+    } catch {
+      toast.error('Error de red al aplicar')
+    } finally {
+      setApplying(false)
+    }
   }
 
   return (
@@ -150,7 +183,7 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
             )}
           </DialogTitle>
           <DialogDescription>
-            La IA organiza las notas de la reunión en: resumen, plan de acción para líderes, tareas para cualquier miembro, y preguntas de aclaración.
+            La IA organiza las notas y genera: resumen, plan de acción, imagen, y sugerencias para crear investigadores y bautismos en el sistema.
           </DialogDescription>
         </DialogHeader>
 
@@ -167,7 +200,7 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
               <div>
                 <h3 className="text-lg font-medium">Sin análisis aún</h3>
                 <p className="text-sm text-stone-500 mt-1 max-w-md mx-auto">
-                  La IA procesará todas las notas de la reunión (visión, prioridades, compromisos, agenda) y generará un plan estructurado, una imagen y preguntas de aclaración si algo no quedó claro.
+                  La IA (Pollinations, gratis, sin API key) analizará todas las notas y generará un plan completo.
                 </p>
               </div>
               <Button onClick={analyze} disabled={analyzing} size="lg">
@@ -176,7 +209,7 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
               </Button>
               {analyzing && (
                 <p className="text-xs text-stone-400">
-                  Esto puede tardar 30–60 segundos. La IA está leyendo las notas y generando el análisis + la imagen.
+                  Esto puede tardar 30-90 segundos. La IA está leyendo las notas y generando todo.
                 </p>
               )}
             </div>
@@ -197,25 +230,22 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
           ) : (
             <ScrollArea className="h-[calc(92vh-180px)]">
               <div className="px-6 py-4 space-y-5">
-                {/* Imagen generada */}
+                {/* Imagen generada (URL lazy de Pollinations) */}
                 {analysis.imageDataUrl && (
                   <div className="rounded-xl overflow-hidden border border-stone-200 bg-stone-50">
-                    <div className="aspect-[1344/768] bg-stone-100">
-                      <img src={analysis.imageDataUrl} alt={analysis.imageDescription || 'Imagen de la reunión'} className="w-full h-full object-cover" />
+                    <div className="aspect-[1344/768] bg-stone-100 relative">
+                      <img
+                        src={analysis.imageDataUrl}
+                        alt={analysis.imageDescription || 'Imagen de la reunión'}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
                     </div>
                     {analysis.imageDescription && (
                       <div className="px-4 py-2 text-xs text-stone-600 italic">
                         {analysis.imageDescription}
                       </div>
                     )}
-                    <div className="px-4 py-2 border-t border-stone-200 flex items-center justify-between bg-white">
-                      <div className="text-xs text-stone-500 flex items-center gap-1">
-                        <ImageIcon className="h-3 w-3" /> Generada por IA
-                      </div>
-                      <Button size="sm" variant="ghost" onClick={downloadImage} className="h-7 text-xs">
-                        Descargar
-                      </Button>
-                    </div>
                   </div>
                 )}
 
@@ -232,9 +262,8 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
                   </div>
                 )}
 
-                {/* Plan de acción: Tareas de líderes vs Cualquiera */}
+                {/* Plan de acción: Lideres vs Cualquiera */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Tareas de líderes */}
                   <div className="rounded-xl border border-amber-200 bg-amber-50/50 overflow-hidden">
                     <div className="px-4 py-3 bg-amber-100/70 border-b border-amber-200">
                       <h3 className="text-sm font-semibold text-amber-900 flex items-center gap-2">
@@ -245,7 +274,7 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
                         </Badge>
                       </h3>
                       <p className="text-xs text-amber-700 mt-0.5">
-                        Solo líderes del sacerdocio (obispo, líder misional, etc.)
+                        Solo líderes del sacerdocio
                       </p>
                     </div>
                     <div className="divide-y divide-amber-100">
@@ -276,7 +305,6 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
                     </div>
                   </div>
 
-                  {/* Tareas para cualquiera */}
                   <div className="rounded-xl border border-teal-200 bg-teal-50/50 overflow-hidden">
                     <div className="px-4 py-3 bg-teal-100/70 border-b border-teal-200">
                       <h3 className="text-sm font-semibold text-teal-900 flex items-center gap-2">
@@ -290,7 +318,7 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
                         No requieren autoridad del sacerdocio
                       </p>
                     </div>
-                    <div className="divide-y divide-teal-100">
+                    <div className="divide-y divide-teal-100 max-h-72 overflow-y-auto">
                       {analysis.generalTasks.length === 0 ? (
                         <div className="px-4 py-6 text-center text-xs text-teal-700">
                           No se identificaron tareas generales.
@@ -319,6 +347,135 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
                   </div>
                 </div>
 
+                {/* Investigadores sugeridos */}
+                {analysis.suggestedInvestigators && analysis.suggestedInvestigators.length > 0 && (
+                  <div className="rounded-xl border border-sky-200 bg-sky-50/50 overflow-hidden">
+                    <div className="px-4 py-3 bg-sky-100/70 border-b border-sky-200">
+                      <h3 className="text-sm font-semibold text-sky-900 flex items-center gap-2">
+                        <UserPlus className="h-4 w-4" />
+                        Investigadores detectados en las notas
+                        <Badge variant="outline" className="ml-auto bg-sky-50 border-sky-300 text-sky-800">
+                          {analysis.suggestedInvestigators.length}
+                        </Badge>
+                      </h3>
+                      <p className="text-xs text-sky-700 mt-0.5">
+                        Estos se pueden crear automáticamente en el sistema con un clic
+                      </p>
+                    </div>
+                    <div className="divide-y divide-sky-100 max-h-60 overflow-y-auto">
+                      {analysis.suggestedInvestigators.map((inv: SuggestedInvestigator, i: number) => (
+                        <div key={i} className="px-4 py-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="font-medium text-sm">{inv.firstName} {inv.lastName}</div>
+                            <div className="flex items-center gap-1.5">
+                              <Badge variant="outline" className="bg-white border-sky-300 text-sky-800 text-xs">
+                                {inv.areaName}
+                              </Badge>
+                              <Badge variant="outline" className="bg-white border-stone-300 text-stone-700 text-xs">
+                                {inv.status}
+                              </Badge>
+                            </div>
+                          </div>
+                          {(inv.baptismGoalDate || inv.baptismDate) && (
+                            <div className="text-xs text-emerald-700 mt-1">
+                              {inv.baptismDate
+                                ? `🎉 Bautizado: ${formatDate(inv.baptismDate)}`
+                                : `📅 Meta bautismo: ${formatDate(inv.baptismGoalDate)}`}
+                            </div>
+                          )}
+                          {inv.notes && (
+                            <div className="text-xs text-stone-600 mt-0.5 italic">{inv.notes}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Bautismos sugeridos (eventos de calendario) */}
+                {analysis.suggestedBaptismEvents && analysis.suggestedBaptismEvents.length > 0 && (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 overflow-hidden">
+                    <div className="px-4 py-3 bg-emerald-100/70 border-b border-emerald-200">
+                      <h3 className="text-sm font-semibold text-emerald-900 flex items-center gap-2">
+                        <CalendarDays className="h-4 w-4" />
+                        Bautismos detectados (se agregarán al calendario)
+                        <Badge variant="outline" className="ml-auto bg-emerald-50 border-emerald-300 text-emerald-800">
+                          {analysis.suggestedBaptismEvents.length}
+                        </Badge>
+                      </h3>
+                    </div>
+                    <div className="divide-y divide-emerald-100">
+                      {analysis.suggestedBaptismEvents.map((b: SuggestedBaptismEvent, i: number) => (
+                        <div key={i} className="px-4 py-2.5 flex items-center justify-between">
+                          <div>
+                            <div className="font-medium text-sm">{b.investigatorName}</div>
+                            <div className="text-xs text-stone-500">{b.areaName}</div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className="bg-white border-emerald-300 text-emerald-800 text-xs">
+                              📅 {formatDate(b.date)}
+                            </Badge>
+                            <Badge className={`text-xs ${b.isTentative ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-emerald-600 text-white border-emerald-700'} border`}>
+                              {b.isTentative ? 'Tentativo' : 'Confirmado'}
+                            </Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Resultado de aplicar */}
+                {applyResult && (
+                  <div className="rounded-xl border border-violet-200 bg-violet-50/50 p-4">
+                    <h3 className="text-sm font-semibold text-violet-900 flex items-center gap-2 mb-2">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Sugerencias aplicadas
+                    </h3>
+                    <div className="grid grid-cols-2 gap-3 text-xs">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                        <span>{applyResult.summary.investigatorsCreated} investigadores creados</span>
+                      </div>
+                      {applyResult.summary.investigatorsSkipped > 0 && (
+                        <div className="flex items-center gap-2">
+                          <XCircle className="h-3.5 w-3.5 text-amber-500" />
+                          <span>{applyResult.summary.investigatorsSkipped} ya existían</span>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                        <span>{applyResult.summary.baptismsUpdated} bautismos actualizados</span>
+                      </div>
+                      {applyResult.summary.baptismsSkipped > 0 && (
+                        <div className="flex items-center gap-2">
+                          <XCircle className="h-3.5 w-3.5 text-amber-500" />
+                          <span>{applyResult.summary.baptismsSkipped} bautismos no aplicables</span>
+                        </div>
+                      )}
+                    </div>
+                    {applyResult.details.investigators.some((i) => !i.created) && (
+                      <div className="mt-3 text-xs text-amber-700 border-t border-amber-200 pt-2">
+                        <strong>No creados:</strong>{' '}
+                        {applyResult.details.investigators.filter((i) => !i.created).map((i) => `${i.name} (${i.reason})`).join(', ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Botón Aplicar todo */}
+                {analysis.suggestedInvestigators && analysis.suggestedInvestigators.length > 0 && !applyResult && (
+                  <Button
+                    onClick={applySuggestions}
+                    disabled={applying}
+                    className="w-full"
+                    size="lg"
+                  >
+                    {applying ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
+                    {applying ? 'Aplicando…' : `Aplicar sugerencias: crear ${analysis.suggestedInvestigators.length} investigadores + ${analysis.suggestedBaptismEvents?.length || 0} bautismos en calendario`}
+                  </Button>
+                )}
+
                 {/* Preguntas de aclaración */}
                 {analysis.questions.length > 0 && (
                   <div className="rounded-xl border border-sky-200 bg-sky-50/50 overflow-hidden">
@@ -330,9 +487,6 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
                           {analysis.questions.length}
                         </Badge>
                       </h3>
-                      <p className="text-xs text-sky-700 mt-0.5">
-                        La IA no entendió estos puntos. Responde para refinar el análisis.
-                      </p>
                     </div>
                     <div className="divide-y divide-sky-100">
                       {analysis.questions.map((q) => (
@@ -379,7 +533,7 @@ export function AIAnalysisModal({ meetingId, open, onOpenChange }: Props) {
                       </Button>
                       <Button size="sm" onClick={refine} disabled={refining}>
                         {refining ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Wand2 className="h-3.5 w-3.5 mr-1" />}
-                        {refining ? 'Refinando…' : 'Refinar análisis con respuestas'}
+                        {refining ? 'Refinando…' : 'Refinar análisis'}
                       </Button>
                     </div>
                   </div>

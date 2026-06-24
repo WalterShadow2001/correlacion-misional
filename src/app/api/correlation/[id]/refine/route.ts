@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { refineAnalysis, generateMeetingImage } from '@/lib/ai'
+import { refineAnalysis, generateImageUrl } from '@/lib/ai'
 
-// POST: refinar análisis con respuestas del usuario a las preguntas
+// POST: refinar análisis con respuestas del usuario
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
@@ -21,6 +21,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'No hay análisis previo. Ejecuta /analyze primero.' }, { status: 400 })
     }
 
+    const areas = await db.area.findMany({ orderBy: { name: 'asc' } })
+
     // Reconstruir el análisis previo
     const previousAnalysis = {
       summary: existing.summary || '',
@@ -30,6 +32,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       imagePrompt: existing.imagePrompt || '',
       imageDescription: existing.imageDescription || '',
       rawResponse: existing.rawResponse || '',
+      suggestedInvestigators: [],
+      suggestedBaptismEvents: [],
     }
 
     await db.aIAnalysis.update({
@@ -38,15 +42,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     })
 
     try {
-      const result = await refineAnalysis(meeting, previousAnalysis, answers)
+      const result = await refineAnalysis(meeting, previousAnalysis, answers, areas)
 
-      // Regenerar imagen si el prompt cambió significativamente
-      let imageDataUrl = existing.imageDataUrl
+      let imageUrl = existing.imageDataUrl
       if (result.imagePrompt && result.imagePrompt !== previousAnalysis.imagePrompt) {
         try {
-          imageDataUrl = await generateMeetingImage(result.imagePrompt)
+          imageUrl = await generateImageUrl(result.imagePrompt)
         } catch (imgErr) {
-          console.error('Error regenerando imagen:', imgErr)
+          console.error('Error regenerando URL de imagen:', imgErr)
         }
       }
 
@@ -60,8 +63,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           questions: JSON.stringify(result.questions),
           imagePrompt: result.imagePrompt,
           imageDescription: result.imageDescription,
-          imageDataUrl,
-          rawResponse: result.rawResponse,
+          imageDataUrl: imageUrl,
+          rawResponse: JSON.stringify({
+            raw: result.rawResponse,
+            suggested: {
+              suggestedInvestigators: result.suggestedInvestigators,
+              suggestedBaptismEvents: result.suggestedBaptismEvents,
+            },
+          }),
         },
       })
 
@@ -76,7 +85,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           questions: result.questions,
           imagePrompt: updated.imagePrompt,
           imageDescription: updated.imageDescription,
-          imageDataUrl: updated.imageDataUrl,
+          imageUrl,
+          suggestedInvestigators: result.suggestedInvestigators,
+          suggestedBaptismEvents: result.suggestedBaptismEvents,
         },
       })
     } catch (e) {

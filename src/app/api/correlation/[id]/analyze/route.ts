@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { analyzeMeeting, generateMeetingImage } from '@/lib/ai'
+import { analyzeMeeting, generateImageUrl } from '@/lib/ai'
 
 // POST: analizar reunión con IA
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -15,7 +15,10 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       return NextResponse.json({ error: 'Reunión no encontrada' }, { status: 404 })
     }
 
-    // Crear o actualizar registro de análisis (estado: PROCESANDO)
+    // Obtener todas las áreas del barrio para que la IA las conozca
+    const areas = await db.area.findMany({ orderBy: { name: 'asc' } })
+
+    // Crear o actualizar registro de análisis
     const analysis = await db.aIAnalysis.upsert({
       where: { meetingId: id },
       create: { meetingId: id, status: 'PROCESANDO' },
@@ -23,21 +26,18 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     })
 
     try {
-      // 1) Llamar al LLM
-      const result = await analyzeMeeting(meeting)
+      const result = await analyzeMeeting(meeting, areas)
 
-      // 2) Generar la imagen (si hay prompt)
-      let imageDataUrl: string | null = null
+      // Generar URL de imagen con Pollinations (no descarga el binario, solo construye URL lazy)
+      let imageUrl: string | null = null
       if (result.imagePrompt) {
         try {
-          imageDataUrl = await generateMeetingImage(result.imagePrompt)
+          imageUrl = await generateImageUrl(result.imagePrompt)
         } catch (imgErr) {
-          console.error('Error generando imagen:', imgErr)
-          // No fallar todo el análisis si solo la imagen falla
+          console.error('Error generando URL de imagen:', imgErr)
         }
       }
 
-      // 3) Guardar resultados
       const updated = await db.aIAnalysis.update({
         where: { id: analysis.id },
         data: {
@@ -48,8 +48,29 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
           questions: JSON.stringify(result.questions),
           imagePrompt: result.imagePrompt,
           imageDescription: result.imageDescription,
-          imageDataUrl,
+          // Guardamos la URL de la imagen (Pollinations lazy) en vez del base64
+          imageDataUrl: imageUrl,
           rawResponse: result.rawResponse,
+        },
+      })
+
+      // Guardamos sugerencias en el rawResponse para que el endpoint /apply las pueda leer
+      // (no tenemos campos separados en DB para esto, así que las incluimos en un JSON auxiliar)
+      const suggestedData = {
+        suggestedInvestigators: result.suggestedInvestigators,
+        suggestedBaptismEvents: result.suggestedBaptismEvents,
+      }
+      await db.aIAnalysis.update({
+        where: { id: analysis.id },
+        data: {
+          // Reutilizamos el campo error como JSON de sugerencias (lo limpiamos)
+          error: null,
+          // Usamos imageDescription para guardar también las sugerencias serializadas
+          // Mejor: extendemos el rawResponse para incluir sugerencias
+          rawResponse: JSON.stringify({
+            raw: result.rawResponse,
+            suggested: suggestedData,
+          }),
         },
       })
 
@@ -64,11 +85,12 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
           questions: result.questions,
           imagePrompt: updated.imagePrompt,
           imageDescription: updated.imageDescription,
-          imageDataUrl: updated.imageDataUrl,
+          imageUrl: imageUrl,
+          suggestedInvestigators: result.suggestedInvestigators,
+          suggestedBaptismEvents: result.suggestedBaptismEvents,
         },
       })
     } catch (e) {
-      // Guardar el error
       await db.aIAnalysis.update({
         where: { id: analysis.id },
         data: { status: 'ERROR', error: (e as Error).message },
@@ -85,12 +107,26 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    const analysis = await db.aIAnalysis.findUnique({
-      where: { meetingId: id },
-    })
+    const analysis = await db.aIAnalysis.findUnique({ where: { meetingId: id } })
     if (!analysis) {
       return NextResponse.json({ ok: true, analysis: null })
     }
+
+    // Parsear sugerencias del rawResponse si están disponibles
+    let suggestedInvestigators: unknown[] = []
+    let suggestedBaptismEvents: unknown[] = []
+    if (analysis.rawResponse) {
+      try {
+        const parsed = JSON.parse(analysis.rawResponse)
+        if (parsed.suggested) {
+          suggestedInvestigators = parsed.suggested.suggestedInvestigators || []
+          suggestedBaptismEvents = parsed.suggested.suggestedBaptismEvents || []
+        }
+      } catch {
+        // rawResponse no es JSON, no hay sugerencias
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       analysis: {
@@ -102,8 +138,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         questions: analysis.questions ? JSON.parse(analysis.questions) : [],
         imagePrompt: analysis.imagePrompt,
         imageDescription: analysis.imageDescription,
-        imageDataUrl: analysis.imageDataUrl,
+        imageUrl: analysis.imageDataUrl,  // ahora es URL, no data URL
         error: analysis.error,
+        suggestedInvestigators,
+        suggestedBaptismEvents,
         updatedAt: analysis.updatedAt,
       },
     })

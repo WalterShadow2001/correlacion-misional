@@ -177,6 +177,8 @@ export type GeneralTaskCategory =
   | 'MUSICA'
   | 'TRANSPORTE'
   | 'SETUP'
+  | 'FELLOWSHIPPING'
+  | 'MINISTRACION'
   | 'OTRO'
 
 export interface GeneralTask {
@@ -194,6 +196,29 @@ export interface AIQuestion {
   answer?: string | null
 }
 
+export interface SuggestedInvestigator {
+  firstName: string
+  lastName: string
+  areaName: string
+  status: 'NUEVO' | 'EN_PROGRESO' | 'FECHA_BAUTISMO' | 'BAUTIZADO' | 'INACTIVO'
+  baptismGoalDate?: string | null
+  baptismDate?: string | null
+  phone?: string | null
+  address?: string | null
+  source?: string | null
+  referredBy?: string | null
+  notes?: string | null
+  rationale?: string
+}
+
+export interface SuggestedBaptismEvent {
+  investigatorName: string
+  areaName: string
+  date: string
+  isTentative: boolean
+  notes?: string
+}
+
 export interface AIAnalysis {
   id: string
   status: AIAnalysisStatus
@@ -203,7 +228,10 @@ export interface AIAnalysis {
   questions: AIQuestion[]
   imagePrompt: string | null
   imageDescription: string | null
-  imageDataUrl: string | null
+  imageDataUrl: string | null  // ahora es URL (Pollinations lazy), no data URL
+  imageUrl?: string | null  // alias para compat
+  suggestedInvestigators?: SuggestedInvestigator[]
+  suggestedBaptismEvents?: SuggestedBaptismEvent[]
   error?: string | null
   updatedAt?: string
 }

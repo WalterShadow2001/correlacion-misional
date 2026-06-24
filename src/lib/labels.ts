@@ -76,6 +76,8 @@ export const GENERAL_TASK_CATEGORY_LABELS = {
   MUSICA: 'Música',
   TRANSPORTE: 'Transporte',
   SETUP: 'Preparación / setup',
+  FELLOWSHIPPING: 'Fellowshipping',
+  MINISTRACION: 'Ministración',
   OTRO: 'Otro',
 }
 
@@ -86,6 +88,8 @@ export const GENERAL_TASK_CATEGORY_COLORS = {
   MUSICA: 'bg-violet-100 text-violet-800 border-violet-200',
   TRANSPORTE: 'bg-teal-100 text-teal-800 border-teal-200',
   SETUP: 'bg-stone-200 text-stone-800 border-stone-300',
+  FELLOWSHIPPING: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+  MINISTRACION: 'bg-rose-100 text-rose-800 border-rose-200',
   OTRO: 'bg-gray-100 text-gray-700 border-gray-200',
 }
 

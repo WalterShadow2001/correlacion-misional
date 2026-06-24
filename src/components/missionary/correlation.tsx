@@ -15,17 +15,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Plus, Trash2, Calendar, Users, ClipboardList, Target, Eye, Sparkles } from 'lucide-react'
+import { Plus, Trash2, Calendar, Users, Sparkles, Eye } from 'lucide-react'
 import { toast } from 'sonner'
-import type { Area, CorrelationMeeting, AgendaItem, AIAnalysis } from '@/lib/types'
-import { AGENDA_STATUS_LABELS, AGENDA_STATUS_COLORS, formatDateLong, formatDate, AI_STATUS_LABELS, AI_STATUS_COLORS } from '@/lib/labels'
+import type { Area, CorrelationMeeting, AIAnalysis } from '@/lib/types'
+import { AI_STATUS_LABELS, AI_STATUS_COLORS, formatDateLong, formatDate } from '@/lib/labels'
 import { AIAnalysisModal } from './ai-analysis-modal'
 
 export function CorrelationTab() {
@@ -34,22 +27,19 @@ export function CorrelationTab() {
   const [loading, setLoading] = useState(true)
 
   const [dialog, setDialog] = useState(false)
-  const [viewDialog, setViewDialog] = useState<CorrelationMeeting | null>(null)
   const [aiModalMeetingId, setAiModalMeetingId] = useState<string | null>(null)
   const [aiAnalysisMap, setAiAnalysisMap] = useState<Record<string, AIAnalysis | null>>({})
 
-  const empty = {
-    areaId: '',
+  // Form state — ahora es una sola nota grande dividida por secciones
+  const [form, setForm] = useState({
     meetingDate: new Date().toISOString().slice(0, 10),
     leader: '',
     attendees: '',
     vision: '',
     priorities: '',
-    notes: '',
+    notes: '',  // <-- aquí van TODAS las notas divididas por área
     commitments: '',
-    agendaItems: [{ topic: '', discussion: '', action: '', responsible: '' }],
-  }
-  const [form, setForm] = useState(empty)
+  })
 
   const load = async () => {
     setLoading(true)
@@ -62,7 +52,6 @@ export function CorrelationTab() {
     }
   }
 
-  // Cargar estado de análisis IA para cada reunión (en paralelo)
   const loadAIStatuses = async (meetingIds: string[]) => {
     if (meetingIds.length === 0) return
     const entries = await Promise.all(
@@ -92,33 +81,47 @@ export function CorrelationTab() {
     }
   }, [meetings.length])
 
-  const openAIModal = (meetingId: string) => {
-    setAiModalMeetingId(meetingId)
+  // Generar plantilla de notas con secciones por área
+  const generateNotesTemplate = () => {
+    if (areas.length === 0) return ''
+    const sections = areas.map((a) => `=== ${a.name} ===\n\n`).join('\n')
+    return sections
   }
 
-  const closeAIModal = (open: boolean) => {
-    if (!open) setAiModalMeetingId(null)
-    else {
-      // Refrescar estado del análisis IA para la reunión que se acaba de cerrar
-      if (aiModalMeetingId) loadAIStatuses([aiModalMeetingId])
-    }
+  const openNew = () => {
+    setForm({
+      meetingDate: new Date().toISOString().slice(0, 10),
+      leader: '',
+      attendees: '',
+      vision: '',
+      priorities: '',
+      notes: generateNotesTemplate(),
+      commitments: '',
+    })
+    setDialog(true)
   }
 
   const save = async () => {
     if (!form.leader.trim() || !form.meetingDate) return toast.error('Fecha y líder son requeridos')
-    const payload = {
-      ...form,
-      areaId: form.areaId || null,
-      agendaItems: form.agendaItems.filter((a) => a.topic.trim()),
-    }
+    if (!form.notes.trim()) return toast.error('Las notas no pueden estar vacías')
+
     const r = await fetch('/api/correlation', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        areaId: null,  // null = general de zona (todas las áreas)
+        meetingDate: form.meetingDate,
+        leader: form.leader,
+        attendees: form.attendees || null,
+        vision: form.vision || null,
+        priorities: form.priorities || null,
+        notes: form.notes,
+        commitments: form.commitments || null,
+        agendaItems: [],  // sin agenda items por ahora — todo va en notes
+      }),
     })
     if (r.ok) {
-      toast.success('Reunión de correlación registrada')
-      setForm(empty)
+      toast.success('Reunión creada')
       setDialog(false)
       load()
     } else {
@@ -127,7 +130,7 @@ export function CorrelationTab() {
   }
 
   const remove = async (id: string) => {
-    if (!confirm('¿Eliminar esta reunión?')) return
+    if (!confirm('¿Eliminar esta reunión y todo su análisis de IA?')) return
     const r = await fetch(`/api/correlation/${id}`, { method: 'DELETE' })
     if (r.ok) {
       toast.success('Reunión eliminada')
@@ -140,12 +143,12 @@ export function CorrelationTab() {
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold">Reuniones de correlación</h2>
+          <h2 className="text-xl font-semibold">Coordinación misional</h2>
           <p className="text-sm text-stone-500">
-            Registra las reuniones semanales de correlación con líderes de barrio, misioneros y compromisos.
+            Escribe todas las notas de la reunión en una sola nota grande dividida por área. La IA hará el resto.
           </p>
         </div>
-        <Button onClick={() => { setForm(empty); setDialog(true) }}>
+        <Button onClick={openNew}>
           <Plus className="h-4 w-4 mr-1" /> Nueva reunión
         </Button>
       </div>
@@ -153,212 +156,178 @@ export function CorrelationTab() {
       {meetings.length === 0 && !loading ? (
         <Card>
           <CardContent className="py-12 text-center text-sm text-stone-500">
-            Aún no hay reuniones de correlación registradas. Crea la primera con el botón "Nueva reunión".
+            Aún no hay reuniones de coordinación registradas. Crea la primera con el botón "Nueva reunión".
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-3">
-          {meetings.map((m) => (
-            <Card key={m.id} className="group">
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <Calendar className="h-4 w-4 text-stone-500" />
-                      {formatDate(m.meetingDate)}
-                      {m.area && <Badge variant="outline" className="ml-1 font-normal">{m.area.name}</Badge>}
-                      {!m.area && <Badge variant="outline" className="ml-1 font-normal">General</Badge>}
-                    </CardTitle>
-                    <div className="text-xs text-stone-500 mt-1 flex items-center gap-3">
-                      <span className="flex items-center gap-1">
-                        <Users className="h-3 w-3" /> {m.leader}
-                      </span>
-                      {m.attendees && <span>· {m.attendees}</span>}
-                      <span>· {m.agendaItems?.length || 0} items en agenda</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7"
-                      onClick={() => openAIModal(m.id)}
-                      title="Analizar con IA"
-                    >
-                      <Sparkles className="h-3.5 w-3.5 mr-1 text-violet-600" /> IA
-                      {aiAnalysisMap[m.id] && aiAnalysisMap[m.id]!.status !== 'PROCESANDO' && (
-                        <Badge className={`ml-1 ${AI_STATUS_COLORS[aiAnalysisMap[m.id]!.status]} border text-[10px] py-0 px-1`}>
-                          {AI_STATUS_LABELS[aiAnalysisMap[m.id]!.status]}
-                        </Badge>
+          {meetings.map((m) => {
+            // Extraer áreas mencionadas en las notas (entre ===)
+            const areaMentions = (m.notes || '').split(/^=== (.+?) ===$/m).filter((_, i) => i % 2 === 1)
+            return (
+              <Card key={m.id} className="group">
+                <CardHeader className="pb-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                        <Calendar className="h-4 w-4 text-stone-500" />
+                        {formatDate(m.meetingDate)}
+                        <Badge variant="outline" className="font-normal">General de zona</Badge>
+                      </CardTitle>
+                      <div className="text-xs text-stone-500 mt-1 flex flex-wrap items-center gap-3">
+                        <span className="flex items-center gap-1">
+                          <Users className="h-3 w-3" /> {m.leader}
+                        </span>
+                        {m.attendees && <span>· {m.attendees}</span>}
+                      </div>
+                      {areaMentions.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {areaMentions.map((a) => (
+                            <Badge key={a} variant="outline" className="text-[10px] bg-stone-50">
+                              {a.trim()}
+                            </Badge>
+                          ))}
+                        </div>
                       )}
-                    </Button>
-                    <Button size="sm" variant="ghost" className="h-7" onClick={() => setViewDialog(m)}>
-                      <Eye className="h-3.5 w-3.5 mr-1" /> Ver
-                    </Button>
-                    <Button size="sm" variant="ghost" className="h-7 text-rose-600" onClick={() => remove(m.id)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    </div>
+                    <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0">
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="h-8 bg-violet-600 hover:bg-violet-700"
+                        onClick={() => setAiModalMeetingId(m.id)}
+                        title="Analizar con IA"
+                      >
+                        <Sparkles className="h-3.5 w-3.5 mr-1" /> IA
+                        {aiAnalysisMap[m.id] && aiAnalysisMap[m.id]!.status !== 'PROCESANDO' && (
+                          <Badge className={`ml-1 ${AI_STATUS_COLORS[aiAnalysisMap[m.id]!.status]} border text-[10px] py-0 px-1`}>
+                            {AI_STATUS_LABELS[aiAnalysisMap[m.id]!.status]}
+                          </Badge>
+                        )}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-8 text-rose-600"
+                        onClick={() => remove(m.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              </CardHeader>
-              {(m.vision || m.priorities || m.commitments) && (
-                <CardContent className="pt-0 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                  {m.vision && (
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-stone-500 flex items-center gap-1 mb-1">
-                        <Target className="h-3 w-3" /> Visión
-                      </div>
-                      <div className="text-xs text-stone-700 line-clamp-3">{m.vision}</div>
+                </CardHeader>
+                {m.notes && (
+                  <CardContent className="pt-0">
+                    <div className="text-xs text-stone-500 uppercase tracking-wide mb-1">Notas</div>
+                    <div className="text-xs text-stone-700 whitespace-pre-wrap line-clamp-6 bg-stone-50 rounded p-2 border border-stone-100">
+                      {m.notes}
                     </div>
-                  )}
-                  {m.priorities && (
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-stone-500 flex items-center gap-1 mb-1">
-                        <ClipboardList className="h-3 w-3" /> Prioridades
-                      </div>
-                      <div className="text-xs text-stone-700 line-clamp-3">{m.priorities}</div>
-                    </div>
-                  )}
-                  {m.commitments && (
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-stone-500 flex items-center gap-1 mb-1">
-                        <ClipboardList className="h-3 w-3" /> Compromisos
-                      </div>
-                      <div className="text-xs text-stone-700 line-clamp-3">{m.commitments}</div>
-                    </div>
-                  )}
-                </CardContent>
-              )}
-            </Card>
-          ))}
+                  </CardContent>
+                )}
+              </Card>
+            )
+          })}
         </div>
       )}
 
-      {/* Dialog nueva reunión */}
+      {/* Dialog nueva reunión — nota grande dividida por áreas */}
       <Dialog open={dialog} onOpenChange={setDialog}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Nueva reunión de correlación</DialogTitle>
+            <DialogTitle>Nueva reunión de coordinación</DialogTitle>
             <DialogDescription>
-              Registra la reunión semanal con líderes de barrio y misioneros. Incluye agenda y compromisos.
+              Escribe TODAS las notas en el campo grande de abajo, divididas por área con el formato:
+              <code className="bg-stone-100 px-1.5 py-0.5 rounded text-xs ml-1">{'=== Panamericano A ==='}</code>
+              La IA detectará automáticamente las áreas, investigadores y bautismos.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
                 <Label>Fecha</Label>
-                <Input type="date" value={form.meetingDate} onChange={(e) => setForm({ ...form, meetingDate: e.target.value })} />
-              </div>
-              <div>
-                <Label>Área (opcional)</Label>
-                <Select value={form.areaId || 'general'} onValueChange={(v) => setForm({ ...form, areaId: v === 'general' ? '' : v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="general">General (toda la zona)</SelectItem>
-                    {areas.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Input
+                  type="date"
+                  value={form.meetingDate}
+                  onChange={(e) => setForm({ ...form, meetingDate: e.target.value })}
+                />
               </div>
               <div>
                 <Label>Líder que preside</Label>
-                <Input value={form.leader} onChange={(e) => setForm({ ...form, leader: e.target.value })} placeholder="Obispo, líder misional de barrio" />
+                <Input
+                  value={form.leader}
+                  onChange={(e) => setForm({ ...form, leader: e.target.value })}
+                  placeholder="Líder Misional de Barrio"
+                />
+              </div>
+              <div>
+                <Label>Asistentes</Label>
+                <Input
+                  value={form.attendees}
+                  onChange={(e) => setForm({ ...form, attendees: e.target.value })}
+                  placeholder="Elderes de las 3 áreas, Obispo, etc."
+                />
               </div>
             </div>
-            <div>
-              <Label>Asistentes</Label>
-              <Input value={form.attendees} onChange={(e) => setForm({ ...form, attendees: e.target.value })} placeholder="Elderes, líderes del sacerdocio, miembros" />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <Label>Visión / enfoque</Label>
-                <Textarea rows={3} value={form.vision} onChange={(e) => setForm({ ...form, vision: e.target.value })} placeholder="Enfoque de la semana" />
+                <Label>Visión / enfoque de la semana</Label>
+                <Textarea
+                  rows={2}
+                  value={form.vision}
+                  onChange={(e) => setForm({ ...form, vision: e.target.value })}
+                  placeholder="Enfoque general de la semana..."
+                />
               </div>
               <div>
                 <Label>Prioridades</Label>
-                <Textarea rows={3} value={form.priorities} onChange={(e) => setForm({ ...form, priorities: e.target.value })} placeholder="Prioridades principales" />
-              </div>
-              <div>
-                <Label>Compromisos</Label>
-                <Textarea rows={3} value={form.commitments} onChange={(e) => setForm({ ...form, commitments: e.target.value })} placeholder="Compromisos generales" />
+                <Textarea
+                  rows={2}
+                  value={form.priorities}
+                  onChange={(e) => setForm({ ...form, priorities: e.target.value })}
+                  placeholder="1. ... 2. ..."
+                />
               </div>
             </div>
 
-            {/* Agenda items */}
-            <div className="border-t pt-3">
-              <div className="flex items-center justify-between mb-2">
-                <Label className="text-sm font-medium">Agenda de la reunión</Label>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setForm({
-                    ...form,
-                    agendaItems: [...form.agendaItems, { topic: '', discussion: '', action: '', responsible: '' }],
-                  })}
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1" /> Item
-                </Button>
+            {/* NOTAS GRANDES DIVIDIDAS POR ÁREA */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <Label className="text-sm font-medium">
+                  Notas por área{' '}
+                  <span className="text-xs text-stone-500 font-normal">
+                    (escribe aquí TODO — la IA detectará áreas, investigadores y bautismos)
+                  </span>
+                </Label>
+                {areas.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setForm({ ...form, notes: generateNotesTemplate() })}
+                  >
+                    Generar plantilla
+                  </Button>
+                )}
               </div>
-              <div className="space-y-2 max-h-60 overflow-y-auto">
-                {form.agendaItems.map((item, idx) => (
-                  <div key={idx} className="grid grid-cols-12 gap-2 items-start border border-stone-200 rounded-lg p-2">
-                    <Input
-                      className="col-span-12 md:col-span-4"
-                      placeholder="Tema del item"
-                      value={item.topic}
-                      onChange={(e) => {
-                        const copy = [...form.agendaItems]
-                        copy[idx] = { ...item, topic: e.target.value }
-                        setForm({ ...form, agendaItems: copy })
-                      }}
-                    />
-                    <Input
-                      className="col-span-12 md:col-span-4"
-                      placeholder="Discusión / análisis"
-                      value={item.discussion}
-                      onChange={(e) => {
-                        const copy = [...form.agendaItems]
-                        copy[idx] = { ...item, discussion: e.target.value }
-                        setForm({ ...form, agendaItems: copy })
-                      }}
-                    />
-                    <Input
-                      className="col-span-7 md:col-span-2"
-                      placeholder="Acción"
-                      value={item.action}
-                      onChange={(e) => {
-                        const copy = [...form.agendaItems]
-                        copy[idx] = { ...item, action: e.target.value }
-                        setForm({ ...form, agendaItems: copy })
-                      }}
-                    />
-                    <Input
-                      className="col-span-4 md:col-span-1"
-                      placeholder="Resp."
-                      value={item.responsible}
-                      onChange={(e) => {
-                        const copy = [...form.agendaItems]
-                        copy[idx] = { ...item, responsible: e.target.value }
-                        setForm({ ...form, agendaItems: copy })
-                      }}
-                    />
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="col-span-1 text-rose-600"
-                      onClick={() => setForm({ ...form, agendaItems: form.agendaItems.filter((_, i) => i !== idx) })}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                ))}
+              <Textarea
+                rows={18}
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                placeholder={`Ejemplo:\n\n=== Panamericano A ===\nFamilia Ornelas madre y 4 hijos se bautisan el 28 de junio...\n\n=== Panamericano B ===\nHermana Pancha y hermano David...\n\n=== Panamericano C ===\nKorina y su hijo Edén...`}
+                className="font-mono text-sm"
+              />
+              <div className="text-xs text-stone-400 mt-1">
+                {form.notes.length} caracteres · {form.notes.split('\n').length} líneas
               </div>
             </div>
 
             <div>
-              <Label>Notas adicionales</Label>
-              <Textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+              <Label>Compromisos generales</Label>
+              <Textarea
+                rows={2}
+                value={form.commitments}
+                onChange={(e) => setForm({ ...form, commitments: e.target.value })}
+              />
             </div>
           </div>
           <DialogFooter>
@@ -368,67 +337,15 @@ export function CorrelationTab() {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog ver reunión */}
-      <Dialog open={!!viewDialog} onOpenChange={(o) => !o && setViewDialog(null)}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Reunión del {formatDateLong(viewDialog?.meetingDate)}</DialogTitle>
-            <DialogDescription>
-              {viewDialog?.area?.name || 'Reunión general'} · Preside: {viewDialog?.leader}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2 text-sm">
-            {viewDialog?.attendees && (
-              <Field label="Asistentes" value={viewDialog.attendees} />
-            )}
-            {viewDialog?.vision && <Field label="Visión / enfoque" value={viewDialog.vision} />}
-            {viewDialog?.priorities && <Field label="Prioridades" value={viewDialog.priorities} />}
-            {viewDialog?.commitments && <Field label="Compromisos" value={viewDialog.commitments} />}
-            {viewDialog?.agendaItems && viewDialog.agendaItems.length > 0 && (
-              <div>
-                <Label className="text-xs uppercase tracking-wide text-stone-500">Agenda</Label>
-                <div className="mt-2 space-y-2">
-                  {viewDialog.agendaItems.map((item: AgendaItem) => (
-                    <div key={item.id} className="p-3 rounded-lg border border-stone-200 bg-stone-50/50">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="font-medium">{item.topic}</div>
-                        <Badge className={`shrink-0 ${AGENDA_STATUS_COLORS[item.status]} border`}>
-                          {AGENDA_STATUS_LABELS[item.status]}
-                        </Badge>
-                      </div>
-                      {item.discussion && <div className="text-xs text-stone-600 mt-1">{item.discussion}</div>}
-                      {item.action && (
-                        <div className="text-xs mt-1">
-                          <span className="text-stone-500">Acción:</span>{' '}
-                          <span className="text-stone-800">{item.action}</span>
-                          {item.responsible && <span className="text-stone-500"> · Responsable: {item.responsible}</span>}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {viewDialog?.notes && <Field label="Notas" value={viewDialog.notes} />}
-          </div>
-        </DialogContent>
-      </Dialog>
-
       {/* Modal de análisis con IA */}
       <AIAnalysisModal
         meetingId={aiModalMeetingId}
         open={!!aiModalMeetingId}
-        onOpenChange={closeAIModal}
+        onOpenChange={(o) => {
+          if (!o) setAiModalMeetingId(null)
+          else if (aiModalMeetingId) loadAIStatuses([aiModalMeetingId])
+        }}
       />
-    </div>
-  )
-}
-
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <Label className="text-xs uppercase tracking-wide text-stone-500">{label}</Label>
-      <div className="mt-1 text-stone-800 whitespace-pre-wrap">{value}</div>
     </div>
   )
 }
