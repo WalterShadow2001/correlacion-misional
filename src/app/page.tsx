@@ -8,7 +8,8 @@ import { InvestigatorsTab } from '@/components/missionary/investigators'
 import { CorrelationTab } from '@/components/missionary/correlation'
 import { CalendarTab } from '@/components/missionary/calendar'
 import { GoalsTab } from '@/components/missionary/goals'
-import { LayoutDashboard, MapPin, Users, ClipboardList, CalendarDays, Target, Church } from 'lucide-react'
+import { SettingsTab } from '@/components/missionary/settings'
+import { LayoutDashboard, MapPin, Users, ClipboardList, CalendarDays, Target, Church, Settings } from 'lucide-react'
 
 export default function Home() {
   const [tab, setTab] = useState('dashboard')
@@ -36,7 +37,7 @@ export default function Home() {
       {/* Main */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6">
         <Tabs value={tab} onValueChange={setTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 md:grid-cols-6 h-auto">
+          <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 md:grid-cols-7 h-auto">
             <TabsTrigger value="dashboard" className="flex items-center gap-1.5 py-2">
               <LayoutDashboard className="h-4 w-4" />
               <span className="hidden sm:inline">Dashboard</span>
@@ -61,6 +62,10 @@ export default function Home() {
               <Target className="h-4 w-4" />
               <span className="hidden sm:inline">Metas</span>
             </TabsTrigger>
+            <TabsTrigger value="settings" className="flex items-center gap-1.5 py-2">
+              <Settings className="h-4 w-4" />
+              <span className="hidden sm:inline">Config</span>
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="dashboard" className="mt-6">
@@ -80,6 +85,9 @@ export default function Home() {
           </TabsContent>
           <TabsContent value="goals" className="mt-6">
             <GoalsTab />
+          </TabsContent>
+          <TabsContent value="settings" className="mt-6">
+            <SettingsTab />
           </TabsContent>
         </Tabs>
       </main>

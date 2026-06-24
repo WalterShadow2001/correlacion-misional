@@ -22,10 +22,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Plus, Trash2, Calendar, Users, ClipboardList, Target, Eye } from 'lucide-react'
+import { Plus, Trash2, Calendar, Users, ClipboardList, Target, Eye, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
-import type { Area, CorrelationMeeting, AgendaItem } from '@/lib/types'
-import { AGENDA_STATUS_LABELS, AGENDA_STATUS_COLORS, formatDateLong, formatDate } from '@/lib/labels'
+import type { Area, CorrelationMeeting, AgendaItem, AIAnalysis } from '@/lib/types'
+import { AGENDA_STATUS_LABELS, AGENDA_STATUS_COLORS, formatDateLong, formatDate, AI_STATUS_LABELS, AI_STATUS_COLORS } from '@/lib/labels'
+import { AIAnalysisModal } from './ai-analysis-modal'
 
 export function CorrelationTab() {
   const [meetings, setMeetings] = useState<CorrelationMeeting[]>([])
@@ -34,6 +35,8 @@ export function CorrelationTab() {
 
   const [dialog, setDialog] = useState(false)
   const [viewDialog, setViewDialog] = useState<CorrelationMeeting | null>(null)
+  const [aiModalMeetingId, setAiModalMeetingId] = useState<string | null>(null)
+  const [aiAnalysisMap, setAiAnalysisMap] = useState<Record<string, AIAnalysis | null>>({})
 
   const empty = {
     areaId: '',
@@ -59,9 +62,47 @@ export function CorrelationTab() {
     }
   }
 
+  // Cargar estado de análisis IA para cada reunión (en paralelo)
+  const loadAIStatuses = async (meetingIds: string[]) => {
+    if (meetingIds.length === 0) return
+    const entries = await Promise.all(
+      meetingIds.map(async (id) => {
+        try {
+          const r = await fetch(`/api/correlation/${id}/analyze`)
+          if (r.ok) {
+            const data = await r.json()
+            return [id, data.analysis] as const
+          }
+        } catch {}
+        return [id, null] as const
+      })
+    )
+    const map: Record<string, AIAnalysis | null> = {}
+    entries.forEach(([id, analysis]) => { map[id] = analysis })
+    setAiAnalysisMap(map)
+  }
+
   useEffect(() => {
     load()
   }, [])
+
+  useEffect(() => {
+    if (meetings.length > 0) {
+      loadAIStatuses(meetings.map((m) => m.id))
+    }
+  }, [meetings.length])
+
+  const openAIModal = (meetingId: string) => {
+    setAiModalMeetingId(meetingId)
+  }
+
+  const closeAIModal = (open: boolean) => {
+    if (!open) setAiModalMeetingId(null)
+    else {
+      // Refrescar estado del análisis IA para la reunión que se acaba de cerrar
+      if (aiModalMeetingId) loadAIStatuses([aiModalMeetingId])
+    }
+  }
 
   const save = async () => {
     if (!form.leader.trim() || !form.meetingDate) return toast.error('Fecha y líder son requeridos')
@@ -136,7 +177,21 @@ export function CorrelationTab() {
                       <span>· {m.agendaItems?.length || 0} items en agenda</span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7"
+                      onClick={() => openAIModal(m.id)}
+                      title="Analizar con IA"
+                    >
+                      <Sparkles className="h-3.5 w-3.5 mr-1 text-violet-600" /> IA
+                      {aiAnalysisMap[m.id] && aiAnalysisMap[m.id]!.status !== 'PROCESANDO' && (
+                        <Badge className={`ml-1 ${AI_STATUS_COLORS[aiAnalysisMap[m.id]!.status]} border text-[10px] py-0 px-1`}>
+                          {AI_STATUS_LABELS[aiAnalysisMap[m.id]!.status]}
+                        </Badge>
+                      )}
+                    </Button>
                     <Button size="sm" variant="ghost" className="h-7" onClick={() => setViewDialog(m)}>
                       <Eye className="h-3.5 w-3.5 mr-1" /> Ver
                     </Button>
@@ -358,6 +413,13 @@ export function CorrelationTab() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Modal de análisis con IA */}
+      <AIAnalysisModal
+        meetingId={aiModalMeetingId}
+        open={!!aiModalMeetingId}
+        onOpenChange={closeAIModal}
+      />
     </div>
   )
 }

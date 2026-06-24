@@ -158,3 +158,61 @@ export interface Stats {
   }[]
   goals: Goal[]
 }
+
+// ===== AI-related types =====
+
+export type AIAnalysisStatus = 'PROCESANDO' | 'COMPLETADO' | 'REFINADO' | 'ERROR'
+
+export interface LeadershipTask {
+  task: string
+  who: string
+  dueDate?: string | null
+  rationale?: string
+}
+
+export type GeneralTaskCategory =
+  | 'PROGRAMAS'
+  | 'DECORACION'
+  | 'REFRIGERIOS'
+  | 'MUSICA'
+  | 'TRANSPORTE'
+  | 'SETUP'
+  | 'OTRO'
+
+export interface GeneralTask {
+  task: string
+  who?: string
+  category: GeneralTaskCategory
+  description?: string
+}
+
+export interface AIQuestion {
+  id: string
+  question: string
+  context: string
+  options: string[]
+  answer?: string | null
+}
+
+export interface AIAnalysis {
+  id: string
+  status: AIAnalysisStatus
+  summary: string | null
+  leadershipTasks: LeadershipTask[]
+  generalTasks: GeneralTask[]
+  questions: AIQuestion[]
+  imagePrompt: string | null
+  imageDescription: string | null
+  imageDataUrl: string | null
+  error?: string | null
+  updatedAt?: string
+}
+
+export interface AISettings {
+  enabled: boolean
+  provider: string
+  hasCustomApiKey: boolean
+  hasCustomSystemPrompt: boolean
+  customSystemPrompt: string
+  language: string
+}

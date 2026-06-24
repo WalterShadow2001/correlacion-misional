@@ -54,6 +54,41 @@ export const AGENDA_STATUS_COLORS: Record<AgendaItemStatus, string> = {
   COMPLETADO: 'bg-emerald-100 text-emerald-800 border-emerald-200',
 }
 
+// AI-related labels
+export const AI_STATUS_LABELS = {
+  PROCESANDO: 'Procesando…',
+  COMPLETADO: 'Análisis completado',
+  REFINADO: 'Refinado con respuestas',
+  ERROR: 'Error',
+}
+
+export const AI_STATUS_COLORS = {
+  PROCESANDO: 'bg-amber-100 text-amber-800 border-amber-200',
+  COMPLETADO: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+  REFINADO: 'bg-violet-100 text-violet-800 border-violet-200',
+  ERROR: 'bg-rose-100 text-rose-800 border-rose-200',
+}
+
+export const GENERAL_TASK_CATEGORY_LABELS = {
+  PROGRAMAS: 'Programas / impresión',
+  DECORACION: 'Decoración',
+  REFRIGERIOS: 'Refrigerios',
+  MUSICA: 'Música',
+  TRANSPORTE: 'Transporte',
+  SETUP: 'Preparación / setup',
+  OTRO: 'Otro',
+}
+
+export const GENERAL_TASK_CATEGORY_COLORS = {
+  PROGRAMAS: 'bg-sky-100 text-sky-800 border-sky-200',
+  DECORACION: 'bg-pink-100 text-pink-800 border-pink-200',
+  REFRIGERIOS: 'bg-amber-100 text-amber-800 border-amber-200',
+  MUSICA: 'bg-violet-100 text-violet-800 border-violet-200',
+  TRANSPORTE: 'bg-teal-100 text-teal-800 border-teal-200',
+  SETUP: 'bg-stone-200 text-stone-800 border-stone-300',
+  OTRO: 'bg-gray-100 text-gray-700 border-gray-200',
+}
+
 export const LESSON_TITLES = [
   '1. La Restauración del Evangelio',
   '2. El Plan de Salvación',

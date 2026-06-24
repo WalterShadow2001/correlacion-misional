@@ -134,6 +134,7 @@ model CorrelationMeeting {
   notes        String?        // notas generales
   commitments  String?        // compromisos
   agendaItems  AgendaItem[]
+  aiAnalysis   AIAnalysis?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 }
@@ -192,3 +193,46 @@ model Fellowshipper {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 }
+
+// ========================================
+// Modelos para análisis con IA
+// ========================================
+
+// Configuración de IA (singleton — un solo registro con id="default")
+model AISettings {
+  id              String   @id @default("default")
+  enabled         Boolean  @default(true)
+  provider        String   @default("zai")          // "zai" o "gemini" (futuro)
+  apiKey           String?                            // opcional: API key propia
+  customSystemPrompt String?                          // prompt del usuario (opcional)
+  language         String   @default("es")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Análisis con IA de una reunión de correlación
+model AIAnalysis {
+  id                String         @id @default(cuid())
+  meetingId         String         @unique
+  meeting           CorrelationMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  status            AIAnalysisStatus @default(PROCESANDO) // PROCESANDO, COMPLETADO, REFINADO, ERROR
+  summary           String?        // resumen estructurado en markdown
+  leadershipTasks   String?        // JSON: [{ task, who, dueDate }]
+  generalTasks      String?        // JSON: [{ task, who, category }]
+  questions         String?        // JSON: [{ id, question, options[], answer }]
+  imagePrompt       String?        // prompt usado para la imagen
+  imageDataUrl      String?        // imagen generada en base64 (data URL)
+  imageDescription  String?        // descripción textual de la imagen
+  rawResponse       String?        // respuesta cruda del LLM (para debug)
+  error             String?        // mensaje de error si falló
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+}
+
+enum AIAnalysisStatus {
+  PROCESANDO
+  COMPLETADO
+  REFINADO
+  ERROR
+}
+
