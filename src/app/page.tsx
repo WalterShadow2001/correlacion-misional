@@ -9,7 +9,7 @@ import { CorrelationTab } from '@/components/missionary/correlation'
 import { CalendarTab } from '@/components/missionary/calendar'
 import { GoalsTab } from '@/components/missionary/goals'
 import { SettingsTab } from '@/components/missionary/settings'
-import { LayoutDashboard, MapPin, Users, ClipboardList, CalendarDays, Target, Church, Settings } from 'lucide-react'
+import { LayoutDashboard, MapPin, Users, ClipboardList, CalendarDays, Target, Settings } from 'lucide-react'
 
 export default function Home() {
   const [tab, setTab] = useState('dashboard')
@@ -20,12 +20,14 @@ export default function Home() {
       <header className="border-b border-stone-200 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-lg bg-stone-800 text-white flex items-center justify-center">
-              <Church className="h-5 w-5" />
-            </div>
+            <img
+              src="/christ-logo.png"
+              alt="Jesucristo — La Iglesia de Jesucristo de los Santos de los Últimos Días"
+              className="h-12 w-12 rounded-lg object-cover bg-blue-900"
+            />
             <div>
-              <h1 className="text-lg font-semibold leading-tight">Correlación Misional</h1>
-              <p className="text-xs text-stone-500">Panel del líder misional de barrio</p>
+              <h1 className="text-lg font-semibold leading-tight">Barrio Panamericano</h1>
+              <p className="text-xs text-stone-500">Coordinación misional — Líder misional de barrio</p>
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-2 text-xs text-stone-400">
@@ -96,10 +98,10 @@ export default function Home() {
       <footer className="border-t border-stone-200 bg-white mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 text-xs text-stone-500 flex flex-wrap items-center justify-between gap-2">
           <div>
-            Sistema de correlación misional — Herramienta local para líderes de barrio.
+            Coordinación misional — Barrio Panamericano · La Iglesia de Jesucristo de los Santos de los Últimos Días
           </div>
-          <div>
-            “Y esta es la vida eterna: que te conozcan a ti, el único Dios verdadero, y a Jesucristo, a quien has enviado.” — Juan 17:3
+          <div className="italic">
+            “Id, y haced discípulos a todas las naciones, bautizándolos en el nombre del Padre, y del Hijo, y del Espíritu Santo.” — Mateo 28:19
           </div>
         </div>
       </footer>

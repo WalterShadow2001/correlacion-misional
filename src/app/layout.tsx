@@ -15,9 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Correlación Misional — Panel del Líder Misional",
-  description: "Sistema de correlación misional para líderes de barrio/estaca de La Iglesia de Jesucristo de los Santos de los Últimos Días. Gestiona áreas, misioneros, investigadores y reuniones de correlación.",
-  keywords: ["correlación misional", "obra misional", "SUD", "lider misional", "investigadores", "elders"],
+  title: "Coordinación Misional — Barrio Panamericano",
+  description: "Sistema de coordinación misional para el Líder Misional de Barrio Panamericano. Gestiona las áreas Panamericano A, B y C, con misioneros, investigadores y reuniones semanales.",
+  keywords: ["coordinación misional", "obra misional", "SUD", "barrio panamericano", "líder misional", "investigadores", "elders"],
 };
 
 export default function RootLayout({
