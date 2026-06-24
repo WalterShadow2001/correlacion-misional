@@ -138,10 +138,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         questions: analysis.questions ? JSON.parse(analysis.questions) : [],
         imagePrompt: analysis.imagePrompt,
         imageDescription: analysis.imageDescription,
-        imageUrl: analysis.imageDataUrl,  // ahora es URL, no data URL
+        imageUrl: analysis.imageDataUrl,
         error: analysis.error,
         suggestedInvestigators,
         suggestedBaptismEvents,
+        userCorrections: analysis.userCorrections ? JSON.parse(analysis.userCorrections) : null,
+        correctionNotes: analysis.correctionNotes,
         updatedAt: analysis.updatedAt,
       },
     })

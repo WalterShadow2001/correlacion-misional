@@ -196,11 +196,23 @@ export interface AIQuestion {
   answer?: string | null
 }
 
+export interface SuggestedFamilyMember {
+  name: string
+  age?: number | null
+  isMember: boolean
+  isInvestigator: boolean
+  relationship?: string | null
+  notes?: string | null
+}
+
+export type PersonType = 'INVESTIGADOR' | 'INACTIVO' | 'CONVERSO_RECIENTE' | 'MIEMBRO'
+
 export interface SuggestedInvestigator {
   firstName: string
   lastName: string
   areaName: string
   status: 'NUEVO' | 'EN_PROGRESO' | 'FECHA_BAUTISMO' | 'BAUTIZADO' | 'INACTIVO'
+  personType?: PersonType
   baptismGoalDate?: string | null
   baptismDate?: string | null
   phone?: string | null
@@ -209,6 +221,7 @@ export interface SuggestedInvestigator {
   referredBy?: string | null
   notes?: string | null
   rationale?: string
+  familyMembers?: SuggestedFamilyMember[]
 }
 
 export interface SuggestedBaptismEvent {
@@ -217,6 +230,16 @@ export interface SuggestedBaptismEvent {
   date: string
   isTentative: boolean
   notes?: string
+}
+
+export interface FamilyMemberRecord {
+  id: string
+  name: string
+  age?: number | null
+  isMember: boolean
+  isInvestigator: boolean
+  relationship?: string | null
+  notes?: string | null
 }
 
 export interface AIAnalysis {
@@ -228,10 +251,12 @@ export interface AIAnalysis {
   questions: AIQuestion[]
   imagePrompt: string | null
   imageDescription: string | null
-  imageDataUrl: string | null  // ahora es URL (Pollinations lazy), no data URL
-  imageUrl?: string | null  // alias para compat
+  imageDataUrl: string | null
+  imageUrl?: string | null
   suggestedInvestigators?: SuggestedInvestigator[]
   suggestedBaptismEvents?: SuggestedBaptismEvent[]
+  userCorrections?: string | null
+  correctionNotes?: string | null
   error?: string | null
   updatedAt?: string
 }

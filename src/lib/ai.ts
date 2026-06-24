@@ -56,11 +56,21 @@ export interface AIQuestion {
 }
 
 // Sugerencias para crear datos en el sistema
+export interface SuggestedFamilyMember {
+  name: string
+  age?: number | null
+  isMember: boolean      // true si ya es miembro de la Iglesia
+  isInvestigator: boolean // true si también está siendo enseñado
+  relationship?: string | null  // "madre", "hijo", "esposa", "papá", "hija", etc.
+  notes?: string | null
+}
+
 export interface SuggestedInvestigator {
   firstName: string
   lastName: string
   areaName: string  // Se buscará por nombre en la DB
   status: 'NUEVO' | 'EN_PROGRESO' | 'FECHA_BAUTISMO' | 'BAUTIZADO' | 'INACTIVO'
+  personType: 'INVESTIGADOR' | 'INACTIVO' | 'CONVERSO_RECIENTE' | 'MIEMBRO'
   baptismGoalDate?: string | null  // YYYY-MM-DD
   baptismDate?: string | null
   phone?: string | null
@@ -69,6 +79,7 @@ export interface SuggestedInvestigator {
   referredBy?: string | null
   notes?: string | null
   rationale?: string  // por qué la IA sugiere crear este investigador
+  familyMembers?: SuggestedFamilyMember[]  // miembros de su familia (miembros o no)
 }
 
 export interface SuggestedBaptismEvent {
@@ -77,6 +88,12 @@ export interface SuggestedBaptismEvent {
   date: string  // YYYY-MM-DD
   isTentative: boolean  // true si es "tentativa", false si es confirmado
   notes?: string
+}
+
+export interface AICorrectionEntry {
+  category: string  // 'investigators' | 'tasks' | 'summary' | 'general'
+  feedback: string
+  createdAt: string
 }
 
 export interface AIAnalysisResult {
@@ -551,8 +568,10 @@ export async function analyzeMeeting(
   const result1 = parseAIResponse(content1)
 
   // === Llamada 2: sugerencias estructuradas para el sistema ===
-  console.log('[ai] Llamada 2: sugerencias de investigadores y bautismos')
-  const suggestionsPrompt = buildSuggestionsPrompt(meetingContext)
+  // Incluir correcciones pasadas para que la IA aprenda
+  const pastCorrections = await getPastCorrections()
+  console.log('[ai] Llamada 2: sugerencias de investigadores y bautismos (con', pastCorrections.length, 'correcciones pasadas)')
+  const suggestionsPrompt = buildSuggestionsPrompt(meetingContext, pastCorrections)
   const content2 = await callLLM([
     { role: 'system', content: systemPrompt },
     { role: 'user', content: suggestionsPrompt },
@@ -572,31 +591,70 @@ export async function analyzeMeeting(
 // Prompt para sugerencias estructuradas (investigadores + bautismos)
 // ========================================
 
-function buildSuggestionsPrompt(meetingContext: string): string {
-  return `${meetingContext}
+async function getPastCorrections(): Promise<AICorrectionEntry[]> {
+  try {
+    // Obtener las últimas 20 correcciones para que la IA aprenda
+    const corrections = await db.aICorrection.findMany({
+      take: 20,
+      orderBy: { createdAt: 'desc' },
+    })
+    return corrections.map((c) => ({
+      category: c.category,
+      feedback: c.feedback,
+      createdAt: c.createdAt.toISOString(),
+    }))
+  } catch {
+    return []
+  }
+}
+
+function buildSuggestionsPrompt(meetingContext: string, pastCorrections: AICorrectionEntry[] = []): string {
+  const correctionsText = pastCorrections.length > 0
+    ? `\n\n## Correcciones pasadas del usuario (APLIQUE ESTAS LECCIONES)\n${pastCorrections.map((c, i) => `${i + 1}. [${c.category}] ${c.feedback}`).join('\n')}\n`
+    : ''
+
+  return `${meetingContext}${correctionsText}
 
 ---
 
 ## Tu tarea
 
-Identifica TODAS las personas mencionadas en las notas que están siendo enseñadas por los misioneros o que tienen bautismo programado/realizado. Genera un JSON con la siguiente estructura EXACTA. NO agregues texto fuera del JSON.
+Identifica TODAS las personas mencionadas en las notas — no solo los que se van a bautizar. Esto incluye:
+
+1. **Investigadores** (personas siendo enseñadas por los misioneros, con o sin fecha de bautismo)
+2. **Miembros inactivos** mencionados para visitar o activar (raíz/rait)
+3. **Conversos recientes** (si ya se bautizaron)
+4. **Miembros de la familia** de cada investigador, marcando cuáles son miembros y cuáles no
+
+Genera un JSON con la siguiente estructura EXACTA. NO agregues texto fuera del JSON.
 
 \`\`\`json
 {
   "suggestedInvestigators": [
     {
-      "firstName": "Nombre (solo el primer nombre, ej: 'María', 'Juan', 'Valeria')",
-      "lastName": "Apellido (si se menciona, ej: 'Ornelas', 'González', 'Valenzuela'. Si no se menciona, usa '')",
-      "areaName": "Panamericano A | Panamericano B | Panamericano C (debe coincidir con el área bajo la cual aparece la nota)",
+      "firstName": "Primer nombre (ej: 'María', 'Valeria', 'Familia' si es un grupo)",
+      "lastName": "Apellido si se menciona, si no ''. Ej: 'Ornelas', 'Valenzuela'",
+      "areaName": "Panamericano A | Panamericano B | Panamericano C (área bajo la cual aparece la nota)",
       "status": "NUEVO | EN_PROGRESO | FECHA_BAUTISMO | BAUTIZADO | INACTIVO",
+      "personType": "INVESTIGADOR | INACTIVO | CONVERSO_RECIENTE | MIEMBRO",
       "baptismGoalDate": "YYYY-MM-DD si hay fecha de bautismo (confirmada o tentativa), o null",
       "baptismDate": "YYYY-MM-DD solo si ya está bautizado, o null",
       "phone": "teléfono si se menciona, o null",
       "address": "dirección/lugar si se menciona (ej: 'laderas', 'La Quemada'), o null",
       "source": "fuente si se infiere (ej: 'Referencia de miembro'), o null",
       "referredBy": "nombre del miembro que refirió si se menciona, o null",
-      "notes": "contexto breve sobre esta persona",
-      "rationale": "por qué sugieres crear este investigador"
+      "notes": "contexto breve sobre esta persona (edad si se menciona, situación, etc.)",
+      "rationale": "por qué sugieres crear este registro",
+      "familyMembers": [
+        {
+          "name": "Nombre del familiar (ej: 'Juan (papá)', 'Ana (mamá)', 'Carlos (hijo 15)')",
+          "age": edad si se menciona, o null,
+          "isMember": true si ya es miembro de la Iglesia, false si no,
+          "isInvestigator": true si también está siendo enseñado, false si no,
+          "relationship": "madre | padre | esposa | esposo | hijo | hija | hermano | hermana | abuelo | abuela | nieto | nieta | primo | prima | tío | tía | sobrino | sobrina | otro",
+          "notes": "contexto adicional si se menciona"
+        }
+      ]
     }
   ],
   "suggestedBaptismEvents": [
@@ -611,14 +669,28 @@ Identifica TODAS las personas mencionadas en las notas que están siendo enseña
 }
 \`\`\`
 
-## Reglas
+## Reglas CRÍTICAS
 
-1. **Crea una entrada por CADA persona mencionada** en las notas que está siendo enseñada, bautizada, o que es miembro inactivo a visitar.
-2. Si la nota dice "familia Ornelas madre y 4 hijos", crea entradas separadas para cada miembro si se pueden identificar (madre, hija 15, hijo 14, gemelos 12). Si no se pueden identificar los nombres, crea una entrada con firstName="Familia" lastName="Ornelas".
-3. Para bautismos: si la nota dice "se bautisan el 28 de junio" → fecha exacta 2026-06-28, isTentative=false. Si dice "tentativa para 4 de julio" → fecha 2026-07-04, isTentative=true.
-4. El areaName debe ser el área bajo la cual aparece la nota (entre los marcadores === Panamericano X ===).
-5. Si la nota menciona "raíz" o "rait", es una reunión de activación, no un bautismo.
-6. Devuelve SOLO el JSON, sin texto adicional.`
+1. **INCLUIR A TODAS LAS PERSONAS**, no solo las que se bautizan:
+   - Investigadores con fecha de bautismo → status="FECHA_BAUTISMO", personType="INVESTIGADOR"
+   - Investigadores sin fecha de bautismo → status="EN_PROGRESO" o "NUEVO", personType="INVESTIGADOR"
+   - Miembros inactivos a visitar (raíz/rait) → status="INACTIVO", personType="INACTIVO"
+   - Conversos recientes (ya bautizados) → status="BAUTIZADO", personType="CONVERSO_RECIENTE"
+
+2. **FAMILIAS**: para cada investigador, lista TODOS los miembros de su familia mencionados en las notas, marcando isMember=true si ya son miembros, isMember=false si no.
+   - Ejemplo: "familia Ornelas madre y 4 hijos se bautisan" → crea 5 entradas de investigador (madre + 4 hijos), Y en cada una, agrega los demás como familyMembers.
+   - Ejemplo: "Valeria (inactiva), hijo de 21 e hija de 16 (la hija es la única no miembro)" → crea 1 entrada para Valeria (inactiva, miembro), y en familyMembers agrega: hijo de 21 (isMember=true), hija de 16 (isMember=false, isInvestigator=true).
+   - Ejemplo: "Korina miembro y su hijo Edén se bautiza" → crea 1 entrada para Edén (investigador, FECHA_BAUTISMO), y en familyMembers agrega: Korina (isMember=true, relationship="madre").
+
+3. **Nombres**: usa "Familia X" como firstName cuando la nota habla de toda una familia sin nombres individuales, y desglosa en familyMembers.
+
+4. **Fechas**: "el 28 de junio" → 2026-06-28. "tentativa para 4 de julio" → 2026-07-04 (isTentative=true). "este Jueves" → calcula desde hoy (2026-06-24 miércoles → jueves 2026-06-25).
+
+5. **Raíz/rait**: son reuniones de activación, NO bautismos. La persona visitada es INACTIVO, no INVESTIGADOR.
+
+6. **No omitas a nadie**. Si una persona se menciona en las notas, debe aparecer en suggestedInvestigators o como familyMember de alguien.
+
+7. Devuelve SOLO el JSON, sin texto adicional.`
 }
 
 // ========================================

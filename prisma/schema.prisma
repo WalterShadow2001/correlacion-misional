@@ -96,6 +96,7 @@ model Investigator {
   lastVisitDate     DateTime?
   notes             String?
   progress          TeachingProgress[]
+  familyMembers     FamilyMember[]
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 }
@@ -215,16 +216,20 @@ model AIAnalysis {
   id                String         @id @default(cuid())
   meetingId         String         @unique
   meeting           CorrelationMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
-  status            AIAnalysisStatus @default(PROCESANDO) // PROCESANDO, COMPLETADO, REFINADO, ERROR
+  status            AIAnalysisStatus @default(PROCESANDO) // PROCESANDO, COMPLETADO, REFINADO, CORREGIDO, ERROR
   summary           String?        // resumen estructurado en markdown
   leadershipTasks   String?        // JSON: [{ task, who, dueDate }]
   generalTasks      String?        // JSON: [{ task, who, category }]
   questions         String?        // JSON: [{ id, question, options[], answer }]
   imagePrompt       String?        // prompt usado para la imagen
-  imageDataUrl      String?        // imagen generada en base64 (data URL)
+  imageDataUrl      String?        // imagen generada (URL lazy o base64)
   imageDescription  String?        // descripción textual de la imagen
   rawResponse       String?        // respuesta cruda del LLM (para debug)
   error             String?        // mensaje de error si falló
+  // Edits del usuario (sobreescriben la salida de la IA)
+  userCorrections   String?        // JSON con la versión corregida por el usuario
+  correctionNotes   String?        // notas del usuario sobre qué estaba mal
+  corrections       AICorrection[]
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 }
@@ -233,6 +238,33 @@ enum AIAnalysisStatus {
   PROCESANDO
   COMPLETADO
   REFINADO
+  CORREGIDO
   ERROR
+}
+
+// Correcciones del usuario para que la IA aprenda
+model AICorrection {
+  id          String   @id @default(cuid())
+  analysisId  String
+  analysis    AIAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  category    String   // 'investigators' | 'tasks' | 'summary' | 'general'
+  feedback    String   // qué dijo el usuario que estaba mal o qué cambiar
+  createdAt   DateTime @default(now())
+}
+
+// Miembros de familia ligados a un investigador
+// (para ver quiénes son miembros y quiénes no dentro de la familia)
+model FamilyMember {
+  id             String   @id @default(cuid())
+  investigatorId String
+  investigator   Investigator @relation(fields: [investigatorId], references: [id], onDelete: Cascade)
+  name           String
+  age            Int?
+  isMember       Boolean  @default(false)
+  isInvestigator Boolean  @default(false)  // true si también es investigador
+  relationship   String?  // "madre", "hijo", "esposa", "papá", etc.
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
