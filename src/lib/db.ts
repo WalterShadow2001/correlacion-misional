@@ -1,6 +1,5 @@
 import { PrismaClient } from '@prisma/client'
 import { PrismaLibSql } from '@prisma/adapter-libsql'
-import { createClient } from '@libsql/client'
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
@@ -22,11 +21,10 @@ function createPrismaClient() {
     return new PrismaClient({ log: ['error', 'warn'] })
   }
 
-  // Modo Turso / libSQL
+  // Modo Turso / libSQL — v7 API: pasar configuración al adaptador directamente
   if (url.startsWith('libsql://') || url.startsWith('http')) {
-    console.log('[db] Using Turso libSQL adapter')
-    const libsql = createClient({ url, authToken })
-    const adapter = new PrismaLibSql(libsql)
+    console.log('[db] Using Turso libSQL adapter (v7 API)')
+    const adapter = new PrismaLibSql({ url, authToken })
     return new PrismaClient({ adapter })
   }
 
@@ -35,5 +33,4 @@ function createPrismaClient() {
 
 export const db = globalForPrisma.prisma ?? createPrismaClient()
 
-// Cache the client globally even in production to reuse across warm invocations
 if (!globalForPrisma.prisma) globalForPrisma.prisma = db
