@@ -1,6 +1,56 @@
 import ZAI from 'z-ai-web-dev-sdk'
+import fs from 'fs'
+import path from 'path'
+import os from 'os'
 import { db } from './db'
 import type { CorrelationMeeting, AgendaItem } from './types'
+
+// ========================================
+// Inicializar configuración Z.ai en runtime
+// ========================================
+// El SDK z-ai-web-dev-sdk busca un archivo .z-ai-config en:
+//   1. process.cwd()/.z-ai-config
+//   2. ~/.z-ai-config
+//   3. /etc/.z-ai-config
+//
+// En Vercel no podemos subir este archivo al repo (contiene tokens),
+// así que lo creamos en runtime desde variables de entorno.
+
+function ensureZAIConfig() {
+  // Si ya existe alguno de los archivos, no hacer nada
+  const candidates = [
+    path.join(process.cwd(), '.z-ai-config'),
+    path.join(os.homedir(), '.z-ai-config'),
+    '/etc/.z-ai-config',
+  ]
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return
+    } catch {}
+  }
+
+  // Si hay variables de entorno, crear el archivo en home
+  const baseUrl = process.env.ZAI_BASE_URL
+  const apiKey = process.env.ZAI_API_KEY
+  const token = process.env.ZAI_TOKEN
+  const chatId = process.env.ZAI_CHAT_ID
+  const userId = process.env.ZAI_USER_ID
+
+  if (baseUrl && apiKey) {
+    const config: Record<string, string> = { baseUrl, apiKey }
+    if (token) config.token = token
+    if (chatId) config.chatId = chatId
+    if (userId) config.userId = userId
+
+    try {
+      const targetPath = path.join(os.homedir(), '.z-ai-config')
+      fs.writeFileSync(targetPath, JSON.stringify(config), { mode: 0o600 })
+      console.log('[ai] .z-ai-config written to', targetPath)
+    } catch (e) {
+      console.error('[ai] Failed to write .z-ai-config:', e)
+    }
+  }
+}
 
 // ========================================
 // Tipos del análisis IA
@@ -46,6 +96,7 @@ let _zai: Awaited<ReturnType<typeof ZAI.create>> | null = null
 
 async function getZAI() {
   if (!_zai) {
+    ensureZAIConfig()
     _zai = await ZAI.create()
   }
   return _zai
