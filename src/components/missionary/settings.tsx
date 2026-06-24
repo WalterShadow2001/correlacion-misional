@@ -192,8 +192,8 @@ export function SettingsTab() {
             <Select value={provider} onValueChange={setProvider}>
               <SelectTrigger id="provider"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="zai">Z.ai (Built-in, recomendado)</SelectItem>
-                <SelectItem value="gemini" disabled>Google Gemini (próximamente)</SelectItem>
+                <SelectItem value="zai">Z.ai (Built-in, solo desarrollo local)</SelectItem>
+                <SelectItem value="gemini">Google Gemini (recomendado para producción)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -202,19 +202,21 @@ export function SettingsTab() {
           <div className="border-t border-stone-200 pt-4">
             <Label htmlFor="apikey" className="text-sm font-medium flex items-center gap-2">
               <Shield className="h-4 w-4 text-stone-500" />
-              API Key (opcional)
+              API Key de Gemini
             </Label>
             <p className="text-xs text-stone-500 mt-0.5 mb-2">
-              {settings.hasCustomApiKey
-                ? 'Ya tienes una API key guardada. Escribe una nueva solo si quieres reemplazarla.'
-                : 'El proveedor Z.ai (built-in) no requiere API key. Déjalo vacío.'}
+              {provider === 'gemini'
+                ? 'Requerido para Gemini. Obtén tu API key gratis en https://aistudio.google.com/apikey'
+                : settings.hasCustomApiKey
+                  ? 'Ya tienes una API key guardada. Escribe una nueva solo si quieres reemplazarla.'
+                  : 'El proveedor Z.ai (built-in) no requiere API key. Gemini sí la requiere.'}
             </p>
             <Input
               id="apikey"
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder={settings.hasCustomApiKey ? '•••••••••••••••• (configurada)' : 'No requerida para Z.ai built-in'}
+              placeholder={settings.hasCustomApiKey ? '•••••••••••••••• (configurada)' : 'AIza...'}
             />
           </div>
 

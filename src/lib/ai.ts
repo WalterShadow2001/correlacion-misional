@@ -56,6 +56,128 @@ function loadZAIConfig(): ZAIConfig | null {
 }
 
 // ========================================
+// LLM abstraction: soporta ZAI (built-in) y Gemini (API key del usuario)
+// ========================================
+
+export interface LLMMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+export interface LLMResponse {
+  content: string
+}
+
+async function getSettings() {
+  try {
+    return await db.aISettings.findUnique({ where: { id: 'default' } })
+  } catch {
+    return null
+  }
+}
+
+// Llamar al LLM con el proveedor configurado
+async function callLLM(messages: LLMMessage[]): Promise<LLMResponse> {
+  const settings = await getSettings()
+
+  // Si el usuario configuró Gemini con API key, usarlo
+  if (settings?.provider === 'gemini' && settings.apiKey) {
+    return callGemini(settings.apiKey, messages)
+  }
+
+  // Si no, usar Z.ai (built-in o env vars)
+  return callZAI(messages)
+}
+
+async function callZAI(messages: LLMMessage[]): Promise<LLMResponse> {
+  const config = loadZAIConfig()
+  if (!config) {
+    throw new Error(
+      'No hay proveedor de IA configurado. Ve a Configuración y selecciona Gemini con tu API key, ' +
+      'o define ZAI_BASE_URL y ZAI_API_KEY como variables de entorno.'
+    )
+  }
+  const zai = new (ZAI as unknown as { new (c: typeof config): InstanceType<typeof ZAI> })(config)
+  console.log('[ai] Using Z.ai provider with', config.baseUrl)
+
+  // El SDK usa 'assistant' como rol del system prompt
+  const sdkMessages = messages.map((m) => ({
+    role: m.role === 'system' ? 'assistant' as const : m.role,
+    content: m.content,
+  }))
+
+  const completion = await zai.chat.completions.create({
+    messages: sdkMessages,
+    thinking: { type: 'disabled' },
+  })
+
+  const content = completion.choices[0]?.message?.content
+  if (!content) throw new Error('Z.ai no devolvió contenido')
+  return { content }
+}
+
+// Google Gemini API (OpenAI-compatible endpoint)
+async function callGemini(apiKey: string, messages: LLMMessage[]): Promise<LLMResponse> {
+  console.log('[ai] Using Google Gemini provider')
+  // Gemini expone una API compatible con OpenAI en esta URL
+  const url = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
+
+  // Convertir messages al formato OpenAI
+  const openaiMessages = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }))
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gemini-2.0-flash',
+      messages: openaiMessages,
+      temperature: 0.7,
+    }),
+  })
+
+  if (!response.ok) {
+    const errText = await response.text()
+    throw new Error(`Gemini API error ${response.status}: ${errText.slice(0, 300)}`)
+  }
+
+  const data = await response.json()
+  const content = data.choices?.[0]?.message?.content
+  if (!content) throw new Error('Gemini no devolvió contenido')
+  return { content }
+}
+
+// Generar imagen con Z.ai (solo disponible con Z.ai built-in)
+// Cuando el proveedor es Gemini, no generamos imagen ( Gemini no tiene image gen gratis)
+async function generateImageWithProvider(prompt: string): Promise<string | null> {
+  const settings = await getSettings()
+  if (settings?.provider === 'gemini') {
+    // Gemini no soporta generación de imágenes en este endpoint
+    return null
+  }
+
+  // Usar Z.ai
+  const config = loadZAIConfig()
+  if (!config) return null
+  const zai = new (ZAI as unknown as { new (c: typeof config): InstanceType<typeof ZAI> })(config)
+
+  const enhanced = `${prompt}, editorial illustration style, warm peaceful lighting, no text, no faces visible, soft colors, missionary work theme, high quality`
+  const response = await zai.images.generations.create({
+    prompt: enhanced,
+    size: '1344x768',
+  })
+
+  const base64 = response.data[0]?.base64
+  if (!base64) return null
+  return `data:image/png;base64,${base64}`
+}
+
+// ========================================
 // Tipos del análisis IA
 // ========================================
 
@@ -92,24 +214,9 @@ export interface AIAnalysisResult {
 }
 
 // ========================================
-// Cliente ZAI singleton
+// Cliente ZAI singleton (legacy — usar callLLM en su lugar)
 // ========================================
-
-let _zai: InstanceType<typeof ZAI> | null = null
-
-async function getZAI(): Promise<InstanceType<typeof ZAI>> {
-  if (!_zai) {
-    const config = loadZAIConfig()
-    if (!config) {
-      throw new Error('Configuración Z.ai no encontrada. Define ZAI_BASE_URL y ZAI_API_KEY como variables de entorno, o crea .z-ai-config.')
-    }
-    // Instanciar directamente para evitar loadConfig() del SDK
-    // (que solo busca en filesystem, no apto para serverless)
-    _zai = new (ZAI as unknown as { new (c: ZAIConfig): InstanceType<typeof ZAI> })(config)
-    console.log('[ai] ZAI client initialized with config from', config.baseUrl)
-  }
-  return _zai
-}
+// Eliminado en favor de callLLM() que soporta múltiples proveedores
 
 // ========================================
 // Prompt del sistema
@@ -269,21 +376,14 @@ function parseAIResponse(content: string): AIAnalysisResult {
 export async function analyzeMeeting(
   meeting: CorrelationMeeting & { agendaItems?: AgendaItem[] }
 ): Promise<AIAnalysisResult> {
-  const zai = await getZAI()
   const systemPrompt = await getSystemPrompt()
   const meetingContext = buildMeetingContext(meeting)
   const userPrompt = buildAnalysisPrompt(meetingContext)
 
-  const completion = await zai.chat.completions.create({
-    messages: [
-      { role: 'assistant', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    thinking: { type: 'disabled' },
-  })
-
-  const content = completion.choices[0]?.message?.content
-  if (!content) throw new Error('La IA no devolvió contenido')
+  const { content } = await callLLM([
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ])
 
   return parseAIResponse(content)
 }
@@ -293,19 +393,11 @@ export async function analyzeMeeting(
 // ========================================
 
 export async function generateMeetingImage(prompt: string): Promise<string> {
-  const zai = await getZAI()
-  // Asegurar estilo editorial SUD-apropiado
-  const enhanced = `${prompt}, editorial illustration style, warm peaceful lighting, no text, no faces visible, soft colors, missionary work theme, high quality`
-
-  const response = await zai.images.generations.create({
-    prompt: enhanced,
-    size: '1344x768', // landscape
-  })
-
-  const base64 = response.data[0]?.base64
-  if (!base64) throw new Error('La IA no devolvió la imagen')
-
-  return `data:image/png;base64,${base64}`
+  const dataUrl = await generateImageWithProvider(prompt)
+  if (!dataUrl) {
+    throw new Error('La generación de imagen solo está disponible con el proveedor Z.ai. Selecciona Z.ai en Configuración o configura variables ZAI_BASE_URL/ZAI_API_KEY.')
+  }
+  return dataUrl
 }
 
 // ========================================
@@ -317,7 +409,6 @@ export async function refineAnalysis(
   previousAnalysis: AIAnalysisResult,
   answers: Record<string, string>
 ): Promise<AIAnalysisResult> {
-  const zai = await getZAI()
   const systemPrompt = await getSystemPrompt()
   const meetingContext = buildMeetingContext(meeting)
 
@@ -346,16 +437,10 @@ Con esta nueva información, genera una versión REFINADA del análisis. Mantén
 
 Devuelve SOLO el JSON, sin texto adicional.`
 
-  const completion = await zai.chat.completions.create({
-    messages: [
-      { role: 'assistant', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    thinking: { type: 'disabled' },
-  })
-
-  const content = completion.choices[0]?.message?.content
-  if (!content) throw new Error('La IA no devolvió contenido en el refinamiento')
+  const { content } = await callLLM([
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ])
 
   return parseAIResponse(content)
 }
@@ -366,15 +451,10 @@ Devuelve SOLO el JSON, sin texto adicional.`
 
 export async function testAIConnection(): Promise<{ ok: boolean; message: string }> {
   try {
-    const zai = await getZAI()
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: 'assistant', content: 'Eres un asistente útil. Responde en español.' },
-        { role: 'user', content: 'Responde solo con la palabra: CONECTADO' },
-      ],
-      thinking: { type: 'disabled' },
-    })
-    const content = completion.choices[0]?.message?.content || ''
+    const { content } = await callLLM([
+      { role: 'system', content: 'Eres un asistente útil. Responde en español.' },
+      { role: 'user', content: 'Responde solo con la palabra: CONECTADO' },
+    ])
     return {
       ok: true,
       message: `IA conectada correctamente. Respuesta de prueba: "${content.slice(0, 50)}"`,
