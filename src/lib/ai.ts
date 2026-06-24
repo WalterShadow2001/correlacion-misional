@@ -128,28 +128,52 @@ async function callGemini(apiKey: string, messages: LLMMessage[]): Promise<LLMRe
     content: m.content,
   }))
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gemini-2.0-flash',
-      messages: openaiMessages,
-      temperature: 0.7,
-    }),
-  })
+  // Lista de modelos a intentar en orden (2.5-pro es el más capaz pero con cuota limitada;
+  // 2.0-flash es más rápido y con más cuota)
+  const models = ['gemini-2.5-pro', 'gemini-2.0-flash']
 
-  if (!response.ok) {
-    const errText = await response.text()
-    throw new Error(`Gemini API error ${response.status}: ${errText.slice(0, 300)}`)
+  let lastError = ''
+  for (const model of models) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: openaiMessages,
+          temperature: 0.7,
+        }),
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        const content = data.choices?.[0]?.message?.content
+        if (content) {
+          console.log(`[ai] Gemini responded with model ${model}`)
+          return { content }
+        }
+        lastError = 'Respuesta vacía de Gemini'
+      } else {
+        const errText = await response.text()
+        lastError = `Gemini ${model} error ${response.status}: ${errText.slice(0, 200)}`
+        // 429 = cuota, intentar con el siguiente modelo
+        // 404 = modelo no disponible, intentar con el siguiente
+        if (response.status !== 429 && response.status !== 404 && response.status !== 400) {
+          // Error fatal, no reintentar
+          throw new Error(lastError)
+        }
+        console.log(`[ai] ${model} failed (${response.status}), trying next model...`)
+      }
+    } catch (e) {
+      lastError = (e as Error).message
+      console.log(`[ai] ${model} threw, trying next model...`)
+    }
   }
 
-  const data = await response.json()
-  const content = data.choices?.[0]?.message?.content
-  if (!content) throw new Error('Gemini no devolvió contenido')
-  return { content }
+  throw new Error(lastError || 'No se pudo conectar con Gemini')
 }
 
 // Generar imagen con Z.ai (solo disponible con Z.ai built-in)
