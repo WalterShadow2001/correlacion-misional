@@ -8,7 +8,6 @@ export async function GET(req: NextRequest) {
     const meetings = await db.correlationMeeting.findMany({
       where: areaId ? { areaId } : undefined,
       include: {
-        area: true,
         agendaItems: { orderBy: { createdAt: 'asc' } },
       },
       orderBy: { meetingDate: 'desc' },
@@ -44,7 +43,7 @@ export async function POST(req: NextRequest) {
             }
           : undefined,
       },
-      include: { agendaItems: true, area: true },
+      include: { agendaItems: true },
     })
     return NextResponse.json(meeting)
   } catch (e) {

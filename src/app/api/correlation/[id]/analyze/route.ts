@@ -9,7 +9,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
 
     const meeting = await db.correlationMeeting.findUnique({
       where: { id },
-      include: { area: true, agendaItems: { orderBy: { createdAt: 'asc' } } },
+      include: { agendaItems: { orderBy: { createdAt: 'asc' } } },
     })
     if (!meeting) {
       return NextResponse.json({ error: 'Reunión no encontrada' }, { status: 404 })
