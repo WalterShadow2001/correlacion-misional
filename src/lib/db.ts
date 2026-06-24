@@ -7,23 +7,33 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 function createPrismaClient() {
-  // Si hay TURSO_AUTH_TOKEN, usamos libSQL (Turso); si no, SQLite local
-  const url = process.env.DATABASE_URL || 'file:./db/local.db'
+  const url = process.env.DATABASE_URL
   const authToken = process.env.TURSO_AUTH_TOKEN
 
-  if (url.startsWith('libsql') || url.startsWith('http')) {
-    if (!authToken) {
-      console.warn('⚠️  TURSO_AUTH_TOKEN no está configurado pero DATABASE_URL apunta a Turso.')
-    }
+  console.log('[db] createPrismaClient called', {
+    url: url ? `${url.slice(0, 40)}...` : 'undefined',
+    authToken: authToken ? '[set]' : 'undefined',
+    NODE_ENV: process.env.NODE_ENV,
+  })
+
+  // Modo local con SQLite en archivo
+  if (!url || url.startsWith('file:')) {
+    console.log('[db] Using local SQLite mode')
+    return new PrismaClient({ log: ['error', 'warn'] })
+  }
+
+  // Modo Turso / libSQL
+  if (url.startsWith('libsql://') || url.startsWith('http')) {
+    console.log('[db] Using Turso libSQL adapter')
     const libsql = createClient({ url, authToken })
     const adapter = new PrismaLibSql(libsql)
     return new PrismaClient({ adapter })
   }
 
-  // Modo local: SQLite en archivo, sin adapter
-  return new PrismaClient({ log: ['error', 'warn'] })
+  throw new Error(`[db] Unsupported DATABASE_URL scheme: ${url}`)
 }
 
 export const db = globalForPrisma.prisma ?? createPrismaClient()
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
+// Cache the client globally even in production to reuse across warm invocations
+if (!globalForPrisma.prisma) globalForPrisma.prisma = db
