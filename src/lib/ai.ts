@@ -29,7 +29,9 @@ function ensureZAIConfig() {
     } catch {}
   }
 
-  // Si hay variables de entorno, crear el archivo en home
+  // Si hay variables de entorno, crear el archivo en /tmp/.z-ai-config
+  // (única ubicación garantizada escribible en serverless)
+  // y parchear process.env.HOME para que el SDK lo encuentre.
   const baseUrl = process.env.ZAI_BASE_URL
   const apiKey = process.env.ZAI_API_KEY
   const token = process.env.ZAI_TOKEN
@@ -42,12 +44,34 @@ function ensureZAIConfig() {
     if (chatId) config.chatId = chatId
     if (userId) config.userId = userId
 
+    const configStr = JSON.stringify(config)
+
+    // Estrategia 1: escribir en process.cwd()
     try {
-      const targetPath = path.join(os.homedir(), '.z-ai-config')
-      fs.writeFileSync(targetPath, JSON.stringify(config), { mode: 0o600 })
-      console.log('[ai] .z-ai-config written to', targetPath)
+      fs.writeFileSync(path.join(process.cwd(), '.z-ai-config'), configStr, { mode: 0o600 })
+      console.log('[ai] .z-ai-config written to cwd')
+      return
     } catch (e) {
-      console.error('[ai] Failed to write .z-ai-config:', e)
+      console.error('[ai] cwd write failed:', e)
+    }
+
+    // Estrategia 2: crear /tmp/.z-ai-config y setear HOME=/tmp
+    try {
+      fs.writeFileSync('/tmp/.z-ai-config', configStr, { mode: 0o600 })
+      process.env.HOME = '/tmp'
+      console.log('[ai] .z-ai-config written to /tmp, HOME set')
+      return
+    } catch (e) {
+      console.error('[ai] /tmp write failed:', e)
+    }
+
+    // Estrategia 3: intentar home original
+    try {
+      const homePath = path.join(os.homedir(), '.z-ai-config')
+      fs.writeFileSync(homePath, configStr, { mode: 0o600 })
+      console.log('[ai] .z-ai-config written to home')
+    } catch (e) {
+      console.error('[ai] home write failed:', e)
     }
   }
 }
