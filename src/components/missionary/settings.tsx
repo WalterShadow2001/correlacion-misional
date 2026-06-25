@@ -15,9 +15,33 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Sparkles, CheckCircle2, Loader2, AlertCircle, Plug, Save, Wand2, Shield } from 'lucide-react'
+import { Sparkles, CheckCircle2, Loader2, AlertCircle, Plug, Save, Wand2, Shield, BookOpen, Trash2, Brain } from 'lucide-react'
 import { toast } from 'sonner'
 import type { AISettings } from '@/lib/types'
+
+interface LessonCategory {
+  category: string
+  count: number
+  lessons: Array<{ feedback: string; count: number; lastUsed: string }>
+}
+interface LessonsData {
+  ok: boolean
+  userCorrections: {
+    total: number
+    unique: number
+    byCategory: LessonCategory[]
+  }
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  doctrina: 'Doctrina SUD',
+  metodologia: 'Metodología',
+  vocabulario: 'Vocabulario SUD',
+  investigators: 'Investigadores',
+  tasks: 'Tareas',
+  summary: 'Resumen',
+  general: 'General',
+}
 
 export function SettingsTab() {
   const [settings, setSettings] = useState<AISettings | null>(null)
@@ -25,6 +49,8 @@ export function SettingsTab() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [lessons, setLessons] = useState<LessonsData | null>(null)
+  const [loadingLessons, setLoadingLessons] = useState(false)
 
   // Form state
   const [enabled, setEnabled] = useState(true)
@@ -51,8 +77,39 @@ export function SettingsTab() {
     }
   }
 
+  const loadLessons = async () => {
+    setLoadingLessons(true)
+    try {
+      const r = await fetch('/api/lessons')
+      if (r.ok) {
+        setLessons(await r.json())
+      }
+    } catch {
+      // Silencioso
+    } finally {
+      setLoadingLessons(false)
+    }
+  }
+
+  const deleteLesson = async (feedback: string) => {
+    if (!confirm('¿Eliminar esta lección? La IA dejará de aplicarla.')) return
+    try {
+      const r = await fetch(`/api/lessons?feedback=${encodeURIComponent(feedback)}`, { method: 'DELETE' })
+      if (r.ok) {
+        const data = await r.json()
+        toast.success(data.message)
+        loadLessons()
+      } else {
+        toast.error('Error al eliminar')
+      }
+    } catch {
+      toast.error('Error de red')
+    }
+  }
+
   useEffect(() => {
     load()
+    loadLessons()
   }, [])
 
   const save = async () => {
@@ -245,6 +302,102 @@ export function SettingsTab() {
               Guardar configuración
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Lecciones aprendidas por la IA */}
+      <Card className="border-violet-200">
+        <CardHeader className="bg-violet-50/50 pb-4">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Brain className="h-5 w-5 text-violet-600" />
+            Lecciones aprendidas por la IA
+            {lessons?.userCorrections && (
+              <Badge variant="outline" className="ml-2 bg-violet-50 border-violet-300 text-violet-800">
+                {lessons.userCorrections.unique} únicas ({lessons.userCorrections.total} total)
+              </Badge>
+            )}
+          </CardTitle>
+          <CardDescription>
+            La IA acumula lecciones de tus correcciones. Cada vez que corriges un análisis, la IA aprende y mejora para futuras reuniones. Las lecciones doctrinales permanentes siempre se aplican.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-4 space-y-4">
+          {/* Lecciones permanentes (doctrina SUD) */}
+          <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3">
+            <div className="text-xs font-semibold text-amber-900 uppercase tracking-wide mb-2 flex items-center gap-1">
+              <BookOpen className="h-3.5 w-3.5" />
+              Lecciones permanentes (doctrina SUD — siempre activas)
+            </div>
+            <ul className="space-y-1.5 text-xs text-stone-700">
+              <li className="flex items-start gap-2">
+                <span className="text-amber-600 mt-0.5">⚠</span>
+                <span><strong>Obispo NO entrevista bautismos de investigadores</strong> — eso lo hace el Líder de Distrito (LD). El Obispo solo entrevista niños de 8 años.</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-amber-600 mt-0.5">⚠</span>
+                <span>El Presidente de Misión autoriza bautismos, pero las entrevistas las hace LD (investigadores) u Obispo (niños de 8 años).</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-amber-600 mt-0.5">•</span>
+                <span>Debes detectar a TODAS las personas mencionadas, no solo las que se bautizan.</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-amber-600 mt-0.5">•</span>
+                <span>Para cada investigador, listar TODOS los familiares (miembros y no miembros).</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-amber-600 mt-0.5">•</span>
+                <span>"raíz" o "rait" = reunión de activación de inactivos (no bautismo).</span>
+              </li>
+            </ul>
+          </div>
+
+          {/* Lecciones aprendidas del usuario */}
+          {loadingLessons ? (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="h-5 w-5 animate-spin text-stone-400" />
+            </div>
+          ) : !lessons || lessons.userCorrections.total === 0 ? (
+            <div className="text-center py-6 text-sm text-stone-500">
+              Aún no has guardado correcciones. Cuando corrijas un análisis de IA, las lecciones aparecerán aquí.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="text-sm text-stone-600">
+                Lecciones aprendidas de tus correcciones (las más frecuentes primero):
+              </div>
+              {lessons.userCorrections.byCategory.map((cat) => (
+                <div key={cat.category} className="rounded-lg border border-stone-200 overflow-hidden">
+                  <div className="px-3 py-2 bg-stone-50 border-b border-stone-200 flex items-center justify-between">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-stone-700">
+                      {CATEGORY_LABELS[cat.category] || cat.category}
+                    </span>
+                    <Badge variant="outline" className="text-xs">{cat.count}</Badge>
+                  </div>
+                  <div className="divide-y divide-stone-100">
+                    {cat.lessons.map((lesson, i) => (
+                      <div key={i} className="px-3 py-2 flex items-start justify-between gap-2 group">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs text-stone-800">{lesson.feedback}</div>
+                          <div className="text-[10px] text-stone-400 mt-1">
+                            Aplicada {lesson.count} vez(ces) · Última: {new Date(lesson.lastUsed).toLocaleDateString('es-MX')}
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-rose-600"
+                          onClick={() => deleteLesson(lesson.feedback)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 

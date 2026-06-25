@@ -243,14 +243,20 @@ Reuniones breves y específicas. **No se centran en eventos, sino en personas**.
 ## Reglas críticas para clasificar tareas
 
 ### Tareas de LÍDERES (requieren autoridad del sacerdocio o llamamiento específico)
-- **Obispo**: entrevistas bautismales, autorizaciones, llamamientos, ordenanzas
-- **Presidente de Estaca**: entrevistas especiales, llamamientos de obispado
+- **Obispo**: llamamientos, entrevistas anuales, entrevistas para templo, **entrevistas bautismales SOLO para niños de 8 años (hijos de record)**, bendecir la Santa Cena. **EL OBISPO NO ENTREVISTA NI AUTORIZA BAUTISMOS DE INVESTIGADORES** — eso lo hace el Líder de Distrito (LD).
+- **Presidente de Estaca**: entrevistas especiales, llamamientos de obispado, tribunales
 - **Líder Misional de Barrio**: coordinación misional, asignar fellowshippers, coordinar bautismos
 - **Presidente de Quórum de Élderes**: dirigir quórum, organizar raíces
 - **Presidente de Sociedad de Socorro**: coordinar ministración a mujeres
 - **Líderes de Sacerdocio**: bendecir la Santa Cena, ordenanzas
 - **Misioneros**: enseñar lecciones misionales, extender compromisos bautismales
-- **Líderes de Distrito (LD)**: entrevistas previas al bautismo
+- **Líderes de Distrito (LD)**: **ENTREVISTAS PREVIAS AL BAUTISMO DE INVESTIGADORES** (no el obispo)
+
+### ⚠️ DOCTRINA CRÍTICA SOBRE ENTREVISTAS BAUTISMALES
+- **Bautismos de investigadores**: la entrevista la hace el **Líder de Distrito (LD)** misional, NO el Obispo
+- **Bautismos de niños de 8 años (hijos de record)**: la entrevista la hace el **Obispo**
+- El Presidente de Misión autoriza todos los bautismos, pero las entrevistas las hacen LD u Obispo según el caso
+- NUNCA asignes al Obispo una entrevista bautismal de un investigador — eso es incorrecto
 
 ### Tareas para CUALQUIER MIEMBRO (no requieren autoridad)
 - **PROGRAMAS**: imprimir programas del servicio bautismal
@@ -354,7 +360,7 @@ Interpreta estas abreviaturas correctamente en el contexto misional SUD.
   "leadershipTasks": [
     {
       "task": "Descripción clara de la tarea que SOLO puede hacer un líder del sacerdocio o con llamamiento específico (obispo, líder misional, LD, presidente de quórum, etc.).",
-      "who": "Rol específico (no nombre). Ej: 'Obispo', 'Líder de Distrito (LD)', 'Líder Misional de Barrio'",
+      "who": "Rol específico (no nombre). Ej: 'Líder de Distrito (LD)' para entrevistas bautismales de investigadores, 'Obispo' solo para niños de 8 años, 'Líder Misional de Barrio', 'Presidente de Quórum de Élderes'",
       "dueDate": "Fecha en YYYY-MM-DD o null",
       "rationale": "Por qué debe hacerlo un líder"
     }
@@ -591,27 +597,88 @@ export async function analyzeMeeting(
 // Prompt para sugerencias estructuradas (investigadores + bautismos)
 // ========================================
 
+// Lecciones permanentes precargadas (doctrina SUD correcta que la IA siempre debe recordar)
+const PERMANENT_LESSONS: AICorrectionEntry[] = [
+  {
+    category: 'doctrina',
+    feedback: 'El Obispo NO entrevista ni autoriza bautismos de investigadores. Las entrevistas bautismales de investigadores las hace el Líder de Distrito (LD) misional. El Obispo SOLO entrevista bautismos de niños de 8 años (hijos de record). NUNCA asignes al Obispo una entrevista bautismal de un investigador.',
+    createdAt: '2026-06-24T00:00:00.000Z',
+  },
+  {
+    category: 'doctrina',
+    feedback: 'El Presidente de Misión es quien posee las llaves para autorizar todos los bautismos en su misión, pero las entrevistas previas las hace el LD (para investigadores) o el Obispo (para niños de 8 años).',
+    createdAt: '2026-06-24T00:00:00.000Z',
+  },
+  {
+    category: 'metodologia',
+    feedback: 'Debes detectar a TODAS las personas mencionadas en las notas, no solo las que se bautizan. Esto incluye: investigadores con y sin fecha de bautismo, miembros inactivos a visitar (raíz/rait), conversos recientes, y miembros de la familia de cada investigador (marcando isMember=true/false).',
+    createdAt: '2026-06-24T00:00:00.000Z',
+  },
+  {
+    category: 'metodologia',
+    feedback: 'Para cada investigador, lista TODOS los miembros de su familia mencionados en las notas. Marca isMember=true si ya son miembros, isMember=false si no. Esto es CRÍTICO para la coordinación misional — ver quién en la familia es miembro y quién no.',
+    createdAt: '2026-06-24T00:00:00.000Z',
+  },
+  {
+    category: 'vocabulario',
+    feedback: '"raíz" o "rait" en jerga misional SUD significa reunión de activación de miembros inactivos. La persona visitada en una raíz es un miembro INACTIVO, no un investigador. NO se debe asignar fecha de bautismo a alguien visitado en raíz.',
+    createdAt: '2026-06-24T00:00:00.000Z',
+  },
+]
+
 async function getPastCorrections(): Promise<AICorrectionEntry[]> {
   try {
-    // Obtener las últimas 20 correcciones para que la IA aprenda
+    // Obtener TODAS las correcciones del usuario (no solo las últimas 20)
+    // Las más recientes se incluirán primero, pero todas cuentan
     const corrections = await db.aICorrection.findMany({
-      take: 20,
       orderBy: { createdAt: 'desc' },
+      take: 50,  // hasta 50 correcciones del usuario
     })
-    return corrections.map((c) => ({
+
+    const userCorrections: AICorrectionEntry[] = corrections.map((c) => ({
       category: c.category,
       feedback: c.feedback,
       createdAt: c.createdAt.toISOString(),
     }))
+
+    // Combinar lecciones permanentes + correcciones del usuario
+    // Las permanentes van primero (siempre se aplican)
+    return [...PERMANENT_LESSONS, ...userCorrections]
   } catch {
-    return []
+    // Si la DB no está disponible, al menos devolver las lecciones permanentes
+    return PERMANENT_LESSONS
   }
 }
 
 function buildSuggestionsPrompt(meetingContext: string, pastCorrections: AICorrectionEntry[] = []): string {
-  const correctionsText = pastCorrections.length > 0
-    ? `\n\n## Correcciones pasadas del usuario (APLIQUE ESTAS LECCIONES)\n${pastCorrections.map((c, i) => `${i + 1}. [${c.category}] ${c.feedback}`).join('\n')}\n`
-    : ''
+  // Agrupar lecciones por categoría para que sea más claro
+  const byCategory: Record<string, string[]> = {}
+  for (const c of pastCorrections) {
+    if (!byCategory[c.category]) byCategory[c.category] = []
+    byCategory[c.category].push(c.feedback)
+  }
+
+  const categoryLabels: Record<string, string> = {
+    doctrina: 'DOCTRINA SUD (CRÍTICO — aplica siempre)',
+    metodologia: 'METODOLOGÍA (cómo analizar las notas)',
+    vocabulario: 'VOCABULARIO SUD',
+    investigators: 'INVESTIGADORES (correcciones del usuario)',
+    tasks: 'TAREAS (correcciones del usuario)',
+    summary: 'RESUMEN (correcciones del usuario)',
+    general: 'GENERAL (correcciones del usuario)',
+  }
+
+  let correctionsText = ''
+  if (Object.keys(byCategory).length > 0) {
+    correctionsText = '\n\n## 📚 LECCIONES APRENDIDAS (APLICA OBLIGATORIAMENTE)\n'
+    for (const [cat, lessons] of Object.entries(byCategory)) {
+      const label = categoryLabels[cat] || cat.toUpperCase()
+      correctionsText += `\n### ${label}\n`
+      lessons.forEach((l, i) => {
+        correctionsText += `${i + 1}. ${l}\n`
+      })
+    }
+  }
 
   return `${meetingContext}${correctionsText}
 
